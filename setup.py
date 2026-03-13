@@ -1,4 +1,3 @@
-import sys
 import os
 
 from setuptools import setup, Extension
@@ -19,7 +18,11 @@ else:
                 Extension("cymysql.err", ["cymysql/err.py"]),
                 Extension("cymysql.times", ["cymysql/times.py"]),
             ],
-            compiler_directives={'language_level': str(sys.version_info[0])},
+            compiler_directives={
+                "language_level": "3",
+                "boundscheck": False,
+                "wraparound": False,
+            },
         )
     except ImportError:
         ext_modules = None
