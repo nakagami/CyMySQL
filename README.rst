@@ -33,7 +33,7 @@ Or without cythonize
 
 ::
 
-   $ NO_CYTHON=1 pip instal cymysql
+   $ NO_CYTHON=1 pip install cymysql
 
 Example
 ---------------
