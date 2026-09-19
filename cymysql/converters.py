@@ -1,7 +1,9 @@
-import re
+from collections.abc import Sequence
 import datetime
-import time
 import decimal
+import re
+import time
+from typing import Any
 
 from cymysql.constants import FIELD_TYPE
 
@@ -10,49 +12,49 @@ ESCAPE_MAP = {'\0': '\\0', '\n': '\\n', '\r': '\\r', '\032': '\\Z',
               '\'': '\\\'', '"': '\\"', '\\': '\\\\'}
 
 
-def escape_dict(val, charset):
+def escape_dict(val: dict[Any, Any], charset: str) -> dict[Any, Any]:
     return dict([(k, escape_item(v, charset)) for k, v in val.items()])
 
 
-def escape_sequence(val, charset):
+def escape_sequence(val: Sequence[Any] | set[Any], charset: str) -> str:
     return "(" + ",".join([escape_item(v, charset) for v in val]) + ")"
 
 
-def escape_set(val, charset):
+def escape_set(val: set[Any] | Sequence[Any], charset: str) -> str:
     return ",".join([escape_item(v, charset) for v in val])
 
 
-def escape_bool(value):
+def escape_bool(value: bool) -> str:
     return str(int(value))
 
 
-def escape_object(value):
+def escape_object(value: Any) -> str:
     return str(value)
 
 
 escape_int = escape_long = escape_object
 
 
-def escape_float(value):
+def escape_float(value: float) -> str:
     return ('%.15g' % value)
 
 
-def escape_string(value):
+def escape_string(value: str) -> str:
     return ("'%s'" % ESCAPE_REGEX.sub(
             lambda match: ESCAPE_MAP.get(match.group(0)), value))
 
 
-def escape_bytes(value):
+def escape_bytes(value: bytes) -> str:
     if len(value) == 0:
         return "''"
     return '0x' + ''.join([('0'+hex(c)[2:])[-2:] for c in value])
 
 
-def escape_None(value):
+def escape_None(value: Any) -> str:
     return 'NULL'
 
 
-def escape_timedelta(obj):
+def escape_timedelta(obj: datetime.timedelta) -> str:
     return "'%02d:%02d:%02d'" % (
         (obj.seconds // 3600) % 24 + obj.days * 24,     # hours
         (obj.seconds // 60) % 60,                       # minutes
@@ -60,7 +62,7 @@ def escape_timedelta(obj):
     )
 
 
-def escape_time(obj):
+def escape_time(obj: datetime.time) -> str:
     if obj.microsecond:
         return "'%02d:%02d:%02d.%06d'" % (
             obj.hour, obj.minute, obj.second, obj.microsecond)
@@ -68,7 +70,7 @@ def escape_time(obj):
         return "'%02d:%02d:%02d'" % (obj.hour, obj.minute, obj.second)
 
 
-def escape_datetime(obj):
+def escape_datetime(obj: datetime.datetime) -> str:
     if obj.microsecond:
         return "'%04d-%02d-%02d %02d:%02d:%02d.%06d'" % (
             obj.year, obj.month, obj.day, obj.hour, obj.minute, obj.second, obj.microsecond)
@@ -77,24 +79,24 @@ def escape_datetime(obj):
             obj.year, obj.month, obj.day, obj.hour, obj.minute, obj.second)
 
 
-def escape_date(obj):
+def escape_date(obj: datetime.date) -> str:
     return "'%04d-%02d-%02d'" % (obj.year, obj.month, obj.day)
 
 
-def escape_struct_time(obj):
+def escape_struct_time(obj: time.struct_time) -> str:
     return escape_datetime(datetime.datetime(*obj[:6]))
 
 
-def escape_decimal(obj):
+def escape_decimal(obj: decimal.Decimal) -> str:
     return str(obj)
 
 
-def escape_vector(obj):
+def escape_vector(obj: Any) -> str:
     import numpy as np
     return escape_bytes(obj.astype(np.float32).tobytes())
 
 
-def convert_datetime(obj):
+def convert_datetime(obj: str | bytes) -> datetime.datetime | datetime.date | None:
     """Returns a DATETIME or TIMESTAMP column value as a datetime object:
 
       >>> datetime_or_None('2007-02-25 23:06:20')
@@ -130,7 +132,7 @@ def convert_datetime(obj):
         return convert_date(obj)
 
 
-def convert_timedelta(obj):
+def convert_timedelta(obj: str | bytes) -> datetime.timedelta | None:
     """Returns a TIME column as a timedelta object:
 
       >>> timedelta_or_None('25:06:17')
@@ -165,7 +167,7 @@ def convert_timedelta(obj):
         return None
 
 
-def convert_time(obj):
+def convert_time(obj: str | bytes) -> datetime.time | None:
     """Returns a TIME column as a time object:
 
       >>> time_or_None('15:06:17')
@@ -199,7 +201,7 @@ def convert_time(obj):
         return None
 
 
-def convert_date(obj):
+def convert_date(obj: str | bytes) -> datetime.date | None:
     """Returns a DATE column as a date object:
 
       >>> date_or_None('2007-02-26')
@@ -221,7 +223,7 @@ def convert_date(obj):
         return None
 
 
-def convert_mysql_timestamp(obj):
+def convert_mysql_timestamp(obj: str | bytes) -> datetime.datetime | datetime.date | None:
     """Convert a MySQL TIMESTAMP to a Timestamp object.
 
     MySQL >= 4.1 returns TIMESTAMP in the same format as DATETIME:
@@ -260,17 +262,17 @@ def convert_mysql_timestamp(obj):
         return None
 
 
-def convert_set(s):
+def convert_set(s: str) -> set[str]:
     return set(s.split(","))
 
 
-def convert_bit(b):
+def convert_bit(b: Any) -> Any:
     # the snippet above is right, but MySQLdb doesn't process bits,
     # so we shouldn't either
     return b
 
 
-def convert_characters(data, encoding=None, field=None):
+def convert_characters(data: bytes, encoding: str | None = None, field: Any = None) -> Any:
     if field.is_set:
         return convert_set(data.decode(field.encoding))
     if field.is_binary:
@@ -282,19 +284,20 @@ def convert_characters(data, encoding=None, field=None):
     return data.decode(field.encoding)
 
 
-def convert_vector(data, encoding=None, field=None):
+def convert_vector(data: bytes, encoding: str | None = None, field: Any = None) -> Any:
     import numpy as np
     return np.frombuffer(data, dtype=np.float32)
 
 
-def convert_json(data, encoding=None, field=None):
+def convert_json(data: bytes, encoding: str | None = None, field: Any = None) -> str:
     return data.decode(encoding)
 
 
-def convert_decimal(obj):
+def convert_decimal(obj: str | bytes) -> decimal.Decimal:
     if not isinstance(obj, str):
         obj = obj.decode('ascii')
     return decimal.Decimal(obj)
+
 
 
 decoders = {
@@ -353,7 +356,7 @@ except ImportError:
     pass
 
 
-def escape_item(val, charset, encoders=encoders):
+def escape_item(val: Any, charset: str, encoders: dict[type, Any] = encoders) -> Any:
     if type(val) in [tuple, list, set]:
         return escape_sequence(val, charset)
     if type(val) is dict:

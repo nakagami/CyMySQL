@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
-import weakref
+from collections.abc import Sequence
 import sys
+from typing import TYPE_CHECKING, Any
+import weakref
 
 from cymysql.err import (
     Warning, Error, InterfaceError, DataError,
@@ -8,40 +10,43 @@ from cymysql.err import (
     NotSupportedError, ProgrammingError
 )
 
+if TYPE_CHECKING:
+    from cymysql.connections import Connection
+
 
 class Cursor(object):
     '''
     This is the object you use to interact with the database.
     '''
-    def __init__(self, connection):
+    def __init__(self, connection: 'Connection') -> None:
         '''
         Do not create an instance of a Cursor yourself. Call
         connections.Connection.cursor().
         '''
-        self.connection = connection
-        self.arraysize = 1
-        self._executed = None
-        self.messages = []
-        self._result = None
-        self._rowcount = None
+        self.connection: Connection | None = connection
+        self.arraysize: int = 1
+        self._executed: str | None = None
+        self.messages: list[tuple[Any, ...]] = []
+        self._result: Any = None
+        self._rowcount: int | None = None
 
-    def __enter__(self):
+    def __enter__(self) -> 'Cursor':
         return self
 
-    def __iter__(self):
+    def __iter__(self) -> Any:
         return iter(self.fetchone, None)
 
-    def __exit__(self, exc, value, traceback):
+    def __exit__(self, exc: Any, value: Any, traceback: Any) -> None:
         self.close()
 
-    def errorhandler(self, errorclass, errorvalue):
+    def errorhandler(self, errorclass: type[Exception], errorvalue: Any) -> None:
         if self.connection:
             self.connection.errorhandler(self, errorclass, errorvalue)
         else:
             raise errorclass(errorvalue)
 
     @property
-    def rowcount(self):
+    def rowcount(self) -> int:
         if self._result and self._result.affected_rows is not None:
             return self._result.affected_rows
         if self._rowcount is not None:
@@ -49,14 +54,14 @@ class Cursor(object):
         return -1
 
     @property
-    def description(self):
+    def description(self) -> list[tuple[Any, ...]] | tuple[tuple[Any, ...], ...] | None:
         return self._result.description if self._result else None
 
     @property
-    def lastrowid(self):
+    def lastrowid(self) -> int | None:
         return self._result.insert_id if self._result else None
 
-    def close(self):
+    def close(self) -> None:
         '''
         Closing a cursor just exhausts all remaining data.
         '''
@@ -70,26 +75,26 @@ class Cursor(object):
 
         self.connection = None
 
-    def _get_db(self):
+    def _get_db(self) -> 'Connection':
         if not self.connection:
             self.errorhandler(ProgrammingError, (-1, "cursor closed"))
         return self.connection
 
-    def _check_executed(self):
+    def _check_executed(self) -> None:
         if not self._executed:
             self.errorhandler(ProgrammingError, (-1, "execute() first"))
 
-    def _flush(self):
+    def _flush(self) -> None:
         if self._result:
             self._result.read_rest_rowdata_packet()
 
-    def setinputsizes(self, *args):
+    def setinputsizes(self, *args: Any) -> None:
         """Does nothing, required by DB API."""
 
-    def setoutputsizes(self, *args):
+    def setoutputsizes(self, *args: Any) -> None:
         """Does nothing, required by DB API."""
 
-    def nextset(self):
+    def nextset(self) -> bool | None:
         ''' Get the next query set '''
         if self._executed:
             self.fetchall()
@@ -102,7 +107,7 @@ class Cursor(object):
         self._do_get_result()
         return True
 
-    def execute(self, query, args=None):
+    def execute(self, query: str | bytes, args: Sequence[Any] | dict[str, Any] | Any | None = None) -> None:
         ''' Execute a query '''
         self._rowcount = None
 
@@ -139,7 +144,7 @@ class Cursor(object):
         self._executed = query
         conn._last_execute_cursor = weakref.ref(self)
 
-    def executemany(self, query, args):
+    def executemany(self, query: str | bytes, args: Sequence[Sequence[Any] | dict[str, Any] | Any]) -> int:
         ''' Run several data against one query '''
         del self.messages[:]
 
@@ -152,7 +157,7 @@ class Cursor(object):
         self._rowcount = rowcount
         return rowcount
 
-    def callproc(self, procname, args=()):
+    def callproc(self, procname: str, args: Sequence[Any] = ()) -> Sequence[Any]:
         """Execute stored procedure procname with args
 
         procname -- string, name of procedure to execute on server
@@ -198,14 +203,14 @@ class Cursor(object):
 
         return args
 
-    def fetchone(self):
+    def fetchone(self) -> tuple[Any, ...] | None:
         ''' Fetch the next row '''
         self._check_executed()
         if self._result is None:
             return None
         return self._result.fetchone()
 
-    def fetchmany(self, size=None):
+    def fetchmany(self, size: int | None = None) -> list[tuple[Any, ...]] | None:
         ''' Fetch several rows '''
         self._check_executed()
         size = size or self.arraysize
@@ -219,7 +224,7 @@ class Cursor(object):
             result.append(r)
         return result
 
-    def fetchall(self):
+    def fetchall(self) -> list[tuple[Any, ...]] | None:
         ''' Fetch all the rows '''
         self._check_executed()
         if self._result is None:
@@ -233,13 +238,13 @@ class Cursor(object):
 
         return result
 
-    def _query(self, q):
+    def _query(self, q: str) -> None:
         conn = self._get_db()
         self._last_executed = q
         conn.query(q)
         self._do_get_result()
 
-    def _do_get_result(self):
+    def _do_get_result(self) -> None:
         conn = self._get_db()
         self._result = conn._result
 
@@ -258,13 +263,13 @@ class Cursor(object):
 class DictCursor(Cursor):
     """A cursor which returns results as a dictionary"""
 
-    def execute(self, query, args=None):
+    def execute(self, query: str | bytes, args: Sequence[Any] | dict[str, Any] | Any | None = None) -> Any:
         result = super(DictCursor, self).execute(query, args)
         if self.description:
             self._fields = [field[0] for field in self.description]
         return result
 
-    def fetchone(self):
+    def fetchone(self) -> dict[str, Any] | None:
         ''' Fetch the next row '''
         self._check_executed()
         if self._result is None:
@@ -274,7 +279,7 @@ class DictCursor(Cursor):
             return None
         return dict(zip(self._fields, r))
 
-    def fetchmany(self, size=None):
+    def fetchmany(self, size: int | None = None) -> tuple[dict[str, Any], ...] | None:
         ''' Fetch several rows '''
         self._check_executed()
         if self._result is None:
@@ -282,7 +287,7 @@ class DictCursor(Cursor):
         result = [dict(zip(self._fields, r)) for r in super(DictCursor, self).fetchmany(size)]
         return tuple(result)
 
-    def fetchall(self):
+    def fetchall(self) -> tuple[dict[str, Any], ...] | None:
         ''' Fetch all the rows '''
         self._check_executed()
         if self._result is None:
@@ -290,3 +295,4 @@ class DictCursor(Cursor):
         return tuple([
             dict(zip(self._fields, r)) for r in super(DictCursor, self).fetchall()
         ])
+

@@ -1,25 +1,30 @@
-import sys
-import ssl
 import asyncio
+import ssl
 import struct
+import sys
+from typing import TYPE_CHECKING, Any
+
+from ..charset import charset_by_name
 from ..connections import (
     Connection,
+    _xor,
     byte2int,
     int2bytes,
     pack_int24,
-    _xor,
 )
-from .cursors import AsyncCursor
-from ..charset import  charset_by_name
-from ..packet import MysqlPacket
-from .result import AsyncMySQLResult
-from .socketwrapper import AsyncSocketWrapper
 from ..constants import CLIENT, COMMAND
 from ..err import InterfaceError
+from ..packet import MysqlPacket
+from .cursors import AsyncCursor
+from .result import AsyncMySQLResult
+from .socketwrapper import AsyncSocketWrapper
+
+if TYPE_CHECKING:
+    from .cursors import AsyncCursor
 
 
 class AsyncConnection(Connection):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         if kwargs.get("loop"):
             self.loop = kwargs.get("loop")
             del kwargs["loop"]
@@ -28,10 +33,10 @@ class AsyncConnection(Connection):
         super().__init__(*args, **kwargs)
         self.last_usage = self.loop.time()
 
-    def _connect(self):
+    def _connect(self) -> None:
         self.socket = AsyncSocketWrapper(self._get_socket(), self.compress)
 
-    async def _initialize(self):
+    async def _initialize(self) -> None:
         self.socket.setblocking(False)
         await self._get_server_information()
         await self._request_authentication()
@@ -49,7 +54,7 @@ class AsyncConnection(Connection):
 
             self.commit()
 
-    async def close(self):
+    async def close(self) -> None:
         ''' Send the quit message and close the socket '''
         if self.socket is None:
             return
@@ -58,7 +63,7 @@ class AsyncConnection(Connection):
         self.socket.close()
         self.socket = None
 
-    async def autocommit(self, value):
+    async def autocommit(self, value: bool) -> None:
         ''' Set whether or not to commit after every execute() '''
         if value:
             q = "SET AUTOCOMMIT = 1"
@@ -71,7 +76,7 @@ class AsyncConnection(Connection):
             exc, value, tb = sys.exc_info()
             self.errorhandler(None, exc, value)
 
-    async def commit(self):
+    async def commit(self) -> None:
         ''' Commit changes to stable storage '''
         try:
             await self._execute_command(COMMAND.COM_QUERY, "COMMIT")
@@ -80,7 +85,7 @@ class AsyncConnection(Connection):
             exc, value, tb = sys.exc_info()
             self.errorhandler(None, exc, value)
 
-    async def rollback(self):
+    async def rollback(self) -> None:
         ''' Roll back the current transaction '''
         try:
             await self._execute_command(COMMAND.COM_QUERY, "ROLLBACK")
@@ -89,7 +94,7 @@ class AsyncConnection(Connection):
             exc, value, tb = sys.exc_info()
             self.errorhandler(None, exc, value)
 
-    def cursor(self, cursor=None):
+    def cursor(self, cursor: type[AsyncCursor] | None = None) -> AsyncCursor:
         self.last_usage = self.loop.time()
         if cursor is None:
             cursor = self.cursorclass
@@ -97,30 +102,30 @@ class AsyncConnection(Connection):
             cursor = AsyncCursor
         return cursor(self)
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> 'AsyncConnection':
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         if self.socket is not None:
             await self.close()
 
     # The following methods are INTERNAL USE ONLY (called from Cursor)
-    async def query(self, sql):
+    async def query(self, sql: str | bytes) -> None:
         await self._execute_command(COMMAND.COM_QUERY, sql)
         self._result = AsyncMySQLResult(self)
         await self._result.read_result()
 
-    async def next_result(self):
+    async def next_result(self) -> None:
         self._result = AsyncMySQLResult(self)
         await self._result.read_result()
 
-    def affected_rows(self):
+    def affected_rows(self) -> int:
         if self._result:
-            self._result._affected_rows
+            return self._result._affected_rows
         else:
             return 0
 
-    async def kill(self, thread_id):
+    async def kill(self, thread_id: int) -> bool:
         arg = struct.pack('<I', thread_id)
         try:
             await self._execute_command(COMMAND.COM_PROCESS_KILL, arg)
@@ -131,7 +136,7 @@ class AsyncConnection(Connection):
             self.errorhandler(None, exc, value)
         return False
 
-    async def ping(self, reconnect=True):
+    async def ping(self, reconnect: bool = True) -> bool | None:
         ''' Check if the server is alive '''
         try:
             await self._execute_command(COMMAND.COM_PING, "")
@@ -147,7 +152,7 @@ class AsyncConnection(Connection):
         pkt = await self.read_packet()
         return pkt.is_ok_packet()
 
-    async def set_charset(self, charset):
+    async def set_charset(self, charset: str) -> None:
         try:
             if charset:
                 await self._execute_command(COMMAND.COM_QUERY, "SET NAMES %s" %
@@ -158,12 +163,12 @@ class AsyncConnection(Connection):
             exc, value, tb = sys.exc_info()
             self.errorhandler(None, exc, value)
 
-    async def read_packet(self):
+    async def read_packet(self) -> MysqlPacket:
         """Read an entire "mysql packet" in its entirety from the network
         and return a MysqlPacket type that represents the results."""
         return MysqlPacket(await self.socket.recv_packet(self.loop), self.charset, self.encoding)
 
-    async def _request_authentication(self):
+    async def _request_authentication(self) -> None:
         if self.user is None:
             raise ValueError("Did not specify a username")
 
@@ -222,18 +227,19 @@ class AsyncConnection(Connection):
         if self.auth_plugin_name == 'caching_sha2_password':
             await self._caching_sha2_authentication2(auth_packet, next_packet)
 
-    async def _execute_command(self, command, sql):
+    async def _execute_command(self, command: int, sql: str | bytes) -> None:
         if not self.socket:
             self.errorhandler(None, InterfaceError, (-1, 'socket not found'))
 
-        sql = sql.encode(self.encoding)
+        if isinstance(sql, str):
+            sql = sql.encode(self.encoding)
 
         if len(sql) + 1 > 0xffffff:
             raise ValueError('Sending query packet is too large')
         prelude = struct.pack('<i', len(sql)+1) + int2bytes(command)
         await self.socket.send_packet(prelude + sql, self.loop)
 
-    async def _caching_sha2_authentication2(self, auth_packet, next_packet):
+    async def _caching_sha2_authentication2(self, auth_packet: bytes, next_packet: int) -> None:
         # https://dev.mysql.com/doc/dev/mysql-server/latest/page_caching_sha2_authentication_exchanges.html
         if auth_packet == b'\x01\x03':   # fast_auth_success
             await self.read_packet()
@@ -266,7 +272,7 @@ class AsyncConnection(Connection):
 
         await self.read_packet()
 
-    async def _get_server_information(self):
+    async def _get_server_information(self) -> None:
         # https://dev.mysql.com/doc/internals/en/connection-phase-packets.html#packet-Protocol::Handshake
         i = 0
         data = await self.socket.recv_uncompress_packet(self.loop)
@@ -307,8 +313,9 @@ class AsyncConnection(Connection):
             self.auth_plugin_name = data[i:data.find(int2bytes(0), i)].decode('utf-8')
 
 
-async def connect(*args, **kwargs):
+async def connect(*args: Any, **kwargs: Any) -> AsyncConnection:
     conn = AsyncConnection(*args, **kwargs)
     conn._connect()
     await conn._initialize()
     return conn
+

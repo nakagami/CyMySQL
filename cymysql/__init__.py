@@ -22,6 +22,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 '''
+from typing import Any
+
 from cymysql import converters
 from cymysql.converters import escape_dict, escape_sequence, escape_string
 from cymysql.err import (
@@ -45,19 +47,19 @@ paramstyle = "format"
 
 class DBAPISet(frozenset):
 
-    def __ne__(self, other):
+    def __ne__(self, other: Any) -> bool:
         if isinstance(other, set):
             return super(DBAPISet, self).__ne__(self, other)
         else:
             return other not in self
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         if isinstance(other, frozenset):
             return frozenset.__eq__(self, other)
         else:
             return other in self
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return frozenset.__hash__(self)
 
 
@@ -76,16 +78,17 @@ DATETIME = TIMESTAMP
 ROWID = DBAPISet()
 
 
-def Binary(x):
+def Binary(x: Any) -> bytes:
     """Return x as a binary type."""
     return bytes(x)
 
 
-def connect(*args, **kwargs):
+def connect(*args: Any, **kwargs: Any) -> Connection:
     conn = Connection(*args, **kwargs)
     conn._connect()
     conn._initialize()
     return conn
+
 
 
 NULL = "NULL"

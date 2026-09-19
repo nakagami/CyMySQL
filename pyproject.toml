@@ -38,3 +38,7 @@ version = {attr = "cymysql.__version__"}
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["cymysql*"]
+
+[tool.setuptools.package-data]
+cymysql = ["py.typed"]
+

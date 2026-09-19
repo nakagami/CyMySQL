@@ -1,26 +1,29 @@
-import weakref
+from collections.abc import Sequence
 import sys
+from typing import Any
+import weakref
+
 from ..cursors import Cursor
 
 
 class AsyncCursor(Cursor):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> 'AsyncCursor':
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> tuple[Any, ...]:
         ret = await self.fetchone()
         if ret is not None:
             return ret
         else:
             raise StopAsyncIteration  # noqa
 
-    async def __aexit__(self, exec, value, traceback):
+    async def __aexit__(self, exec: Any, value: Any, traceback: Any) -> None:
         await self.close()
 
-    async def close(self):
+    async def close(self) -> None:
         '''
         Closing a cursor just exhausts all remaining data.
         '''
@@ -32,11 +35,11 @@ class AsyncCursor(Cursor):
         except:
             pass
 
-    async def _flush(self):
+    async def _flush(self) -> None:
         if self._result:
             await self._result.read_rest_rowdata_packet()
 
-    async def nextset(self):
+    async def nextset(self) -> bool | None:
         ''' Get the next query set '''
         if self._executed:
             await self.fetchall()
@@ -49,7 +52,7 @@ class AsyncCursor(Cursor):
         self._do_get_result()
         return True
 
-    async def execute(self, query, args=None):
+    async def execute(self, query: str | bytes, args: Sequence[Any] | dict[str, Any] | Any | None = None) -> None:
         ''' Execute a query '''
         self._rowcount = None
 
@@ -82,7 +85,7 @@ class AsyncCursor(Cursor):
         self._executed = query
         conn._last_execute_cursor = weakref.ref(self)
 
-    async def executemany(self, query, args):
+    async def executemany(self, query: str | bytes, args: Sequence[Sequence[Any] | dict[str, Any] | Any]) -> int:
         ''' Run several data against one query '''
         del self.messages[:]
 
@@ -95,7 +98,7 @@ class AsyncCursor(Cursor):
         self._rowcount = rowcount
         return rowcount
 
-    async def callproc(self, procname, args=()):
+    async def callproc(self, procname: str, args: Sequence[Any] = ()) -> Sequence[Any]:
         """Execute stored procedure procname with args
 
         procname -- string, name of procedure to execute on server
@@ -137,14 +140,14 @@ class AsyncCursor(Cursor):
 
         return args
 
-    async def fetchone(self):
+    async def fetchone(self) -> tuple[Any, ...] | None:
         ''' Fetch the next row '''
         self._check_executed()
         if self._result is None:
             return None
         return await self._result.fetchone()
 
-    async def fetchmany(self, size=None):
+    async def fetchmany(self, size: int | None = None) -> list[tuple[Any, ...]] | None:
         ''' Fetch several rows '''
         self._check_executed()
         size = size or self.arraysize
@@ -158,7 +161,7 @@ class AsyncCursor(Cursor):
             result.append(r)
         return result
 
-    async def fetchall(self):
+    async def fetchall(self) -> list[tuple[Any, ...]] | None:
         ''' Fetch all the rows '''
         self._check_executed()
         if self._result is None:
@@ -172,7 +175,7 @@ class AsyncCursor(Cursor):
 
         return result
 
-    async def _query(self, q):
+    async def _query(self, q: str) -> None:
         conn = self._get_db()
         self._last_executed = q
         await conn.query(q)
@@ -182,13 +185,13 @@ class AsyncCursor(Cursor):
 class AsyncDictCursor(AsyncCursor):
     """A cursor which returns results as a dictionary"""
 
-    async def execute(self, query, args=None):
+    async def execute(self, query: str | bytes, args: Sequence[Any] | dict[str, Any] | Any | None = None) -> Any:
         result = await super().execute(query, args)
         if self.description:
             self._fields = [field[0] for field in self.description]
         return result
 
-    async def fetchone(self):
+    async def fetchone(self) -> dict[str, Any] | None:
         ''' Fetch the next row '''
         self._check_executed()
         if self._result is None:
@@ -198,7 +201,7 @@ class AsyncDictCursor(AsyncCursor):
             return None
         return dict(zip(self._fields, r))
 
-    async def fetchmany(self, size=None):
+    async def fetchmany(self, size: int | None = None) -> tuple[dict[str, Any], ...] | None:
         ''' Fetch several rows '''
         self._check_executed()
         if self._result is None:
@@ -206,7 +209,7 @@ class AsyncDictCursor(AsyncCursor):
         result = [dict(zip(self._fields, r)) for r in await super().fetchmany(size)]
         return tuple(result)
 
-    async def fetchall(self):
+    async def fetchall(self) -> tuple[dict[str, Any], ...] | None:
         ''' Fetch all the rows '''
         self._check_executed()
         if self._result is None:
@@ -214,3 +217,4 @@ class AsyncDictCursor(AsyncCursor):
         return tuple([
             dict(zip(self._fields, r)) for r in await super().fetchall()
         ])
+

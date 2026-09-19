@@ -1,30 +1,32 @@
 
-def encoding_by_charset(charset):
+def encoding_by_charset(charset: str) -> str:
     if charset in ('utf8mb4', 'utf8mb3'):
         return 'utf8'
     return charset
 
 
 class Charset(object):
-    def __init__(self, id, name, collation, is_default):
+    def __init__(self, id: int, name: str, collation: str, is_default: str) -> None:
         self.id, self.name, self.collation = id, name, collation
         self.is_default = is_default == 'Yes'
 
 
 class Charsets(object):
-    def __init__(self):
-        self._by_id = {}
+    def __init__(self) -> None:
+        self._by_id: dict[int, Charset] = {}
 
-    def add(self, c):
+    def add(self, c: Charset) -> None:
         self._by_id[c.id] = c
 
-    def by_name(self, name):
+    def by_name(self, name: str) -> Charset | None:
         for c in self._by_id.values():
             if c.name == name and c.is_default:
                 return c
+        return None
 
-    def by_id(self, id):
+    def by_id(self, id: int) -> Charset:
         return self._by_id[id]
+
 
 
 _charsets = Charsets()

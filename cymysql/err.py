@@ -1,12 +1,13 @@
 import struct
 import sys
+from typing import Any
 from cymysql.constants import ER
 
 
 class MySQLError(Exception):
 
     """Exception related to operation with MySQL."""
-    def __init__(self, *args):
+    def __init__(self, *args: Any) -> None:
         if len(args) == 2:
             self.errno = args[0]
             self.errmsg = args[1]
@@ -14,6 +15,7 @@ class MySQLError(Exception):
             self.errno = -1
             self.errmsg = args[0]
         super(MySQLError, self).__init__(*args)
+
 
 
 class Warning(Warning, MySQLError):
@@ -114,7 +116,7 @@ _map_error(OperationalError, ER.DBACCESS_DENIED_ERROR, ER.ACCESS_DENIED_ERROR,
 del _map_error, ER
 
 
-def _get_error_info(data):
+def _get_error_info(data: bytes) -> tuple[int, str | None, str]:
     errno = struct.unpack('<h', data[1:3])[0]
     if data[3] == ord("#"):
         # version 4.1
@@ -126,7 +128,7 @@ def _get_error_info(data):
         return (errno, None, data[3:].decode("utf8"))
 
 
-def _check_mysql_exception(errinfo):
+def _check_mysql_exception(errinfo: tuple[int, str | None, str]) -> None:
     errno, sqlstate, errorvalue = errinfo
     errorclass = error_map.get(errno, None)
     if errorclass:
@@ -136,6 +138,7 @@ def _check_mysql_exception(errinfo):
     raise InternalError(errno, errorvalue)
 
 
-def raise_mysql_exception(data):
+def raise_mysql_exception(data: bytes) -> None:
     errinfo = _get_error_info(data)
     _check_mysql_exception(errinfo)
+

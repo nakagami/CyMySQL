@@ -1,14 +1,16 @@
 # Python implementation of the MySQL client-server protocol
 #   https://dev.mysql.com/doc/dev/mysql-server/latest/PAGE_PROTOCOL.html
 
+from collections.abc import Sequence
+import getpass
 import hashlib
+import os
 import socket
 import ssl
+import stat
 import struct
 import sys
-import os
-import stat
-import getpass
+from typing import TYPE_CHECKING, Any
 try:
     from ConfigParser import RawConfigParser
 except ImportError:
@@ -25,37 +27,40 @@ from cymysql.packet import MysqlPacket
 from cymysql.result import MySQLResult
 from cymysql.socketwrapper import SocketWrapper
 
+if TYPE_CHECKING:
+    from cymysql.cursors import Cursor
+
 DEFAULT_USER = getpass.getuser()
 DEFAULT_CHARSET = 'utf8mb4'
 
 
-def sha_new(*args, **kwargs):
+def sha_new(*args: Any, **kwargs: Any) -> Any:
     return hashlib.new("sha1", *args, **kwargs)
 
 
-def sha256_new(*args, **kwargs):
+def sha256_new(*args: Any, **kwargs: Any) -> Any:
     return hashlib.new("sha256", *args, **kwargs)
 
 
-def byte2int(b):
+def byte2int(b: int | bytes | str) -> int:
     if isinstance(b, int):
         return b
     else:
         return ord(b)
 
 
-def int2bytes(i):
+def int2bytes(i: int) -> bytes:
     return bytes([i])
 
 
-def pack_int24(n):
+def pack_int24(n: int) -> bytes:
     return bytes([n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF])
 
 
 SCRAMBLE_LENGTH = 20
 
 
-def _xor(data1, data2):
+def _xor(data1: bytes, data2: bytes) -> bytes:
     result = b''
     for i in range(len(data1)):
         j = i % len(data2)
@@ -64,7 +69,7 @@ def _xor(data1, data2):
     return result
 
 
-def _mysql_native_password_scramble(password, message):
+def _mysql_native_password_scramble(password: str | bytes | None, message: bytes) -> bytes:
     if password is None or len(password) == 0:
         return b''
     message2 = sha_new(password).digest()
@@ -76,7 +81,7 @@ def _mysql_native_password_scramble(password, message):
     return _xor(message1, message2)
 
 
-def _caching_sha2_password_scramble(password, nonce):
+def _caching_sha2_password_scramble(password: str | bytes | None, nonce: bytes) -> bytes:
     if password is None or len(password) == 0:
         return b''
     message1 = sha256_new(password).digest()
@@ -94,7 +99,7 @@ class Connection(object):
     The proper way to get an instance of this class is to call
     connect()."""
 
-    def errorhandler(connection, cursor, errorclass, errorvalue):
+    def errorhandler(connection: 'Connection', cursor: 'Cursor | None', errorclass: type[Exception], errorvalue: Any) -> None:
         err = errorclass, errorvalue
 
         if cursor:
@@ -111,14 +116,15 @@ class Connection(object):
         else:
             raise errorclass(*errorvalue)
 
-    def __init__(self, host="localhost", user=None, passwd="",
-                 db=None, port=3306, unix_socket=None,
-                 charset='', sql_mode=None,
-                 read_default_file=None,
-                 client_flag=0, cursorclass=None, init_command=None,
-                 connect_timeout=None, ssl=None, read_default_group=None,
-                 compression_algorithm="", zstd_compression_level=3, named_pipe=None,
-                 conv=decoders, encoders=encoders):
+    def __init__(self, host: str = "localhost", user: str | None = None, passwd: str = "",
+                 db: str | None = None, port: int = 3306, unix_socket: str | None = None,
+                 charset: str = '', sql_mode: str | None = None,
+                 read_default_file: str | None = None,
+                 client_flag: int = 0, cursorclass: type[Cursor] | None = None, init_command: str | None = None,
+                 connect_timeout: float | None = None, ssl: dict[str, Any] | None = None, read_default_group: str | None = None,
+                 compression_algorithm: str = "", zstd_compression_level: int = 3, named_pipe: Any = None,
+                 conv: dict[int, Any] = decoders, encoders: dict[type, Any] = encoders) -> None:
+
         """
         Establish a connection to the MySQL database. Accepts several
         arguments:
@@ -239,7 +245,7 @@ class Connection(object):
         self.sql_mode = sql_mode
         self.init_command = init_command
 
-    def _initialize(self):
+    def _initialize(self) -> None:
         self._get_server_information()
         self._request_authentication()
         self.set_charset(self.charset)
@@ -256,7 +262,7 @@ class Connection(object):
 
             self.commit()
 
-    def close(self):
+    def close(self) -> None:
         ''' Send the quit message and close the socket '''
         if self.socket is None:
             return
@@ -266,10 +272,10 @@ class Connection(object):
         self.socket = None
 
     @property
-    def closed(self):
+    def closed(self) -> bool:
         return self.socket is None
 
-    def autocommit(self, value):
+    def autocommit(self, value: bool) -> None:
         ''' Set whether or not to commit after every execute() '''
         if value:
             q = "SET AUTOCOMMIT = 1"
@@ -282,7 +288,7 @@ class Connection(object):
             exc, value, tb = sys.exc_info()
             self.errorhandler(None, exc, value)
 
-    def commit(self):
+    def commit(self) -> None:
         ''' Commit changes to stable storage '''
         try:
             self._execute_command(COMMAND.COM_QUERY, "COMMIT")
@@ -291,7 +297,7 @@ class Connection(object):
             exc, value, tb = sys.exc_info()
             self.errorhandler(None, exc, value)
 
-    def rollback(self):
+    def rollback(self) -> None:
         ''' Roll back the current transaction '''
         try:
             self._execute_command(COMMAND.COM_QUERY, "ROLLBACK")
@@ -300,15 +306,15 @@ class Connection(object):
             exc, value, tb = sys.exc_info()
             self.errorhandler(None, exc, value)
 
-    def escape(self, obj):
+    def escape(self, obj: Any) -> Any:
         ''' Escape whatever value you pass to it  '''
         return escape_item(obj, self.charset, self.encoders)
 
-    def literal(self, obj):
+    def literal(self, obj: Any) -> Any:
         ''' Alias for escape() '''
         return escape_item(obj, self.charset, self.encoders)
 
-    def cursor(self, cursor=None):
+    def cursor(self, cursor: type[Cursor] | None = None) -> Cursor:
         ''' Create a new cursor to execute queries with '''
         if cursor is None:
             cursor = self.cursorclass
@@ -316,42 +322,42 @@ class Connection(object):
             cursor = Cursor
         return cursor(self)
 
-    def __enter__(self):
+    def __enter__(self) -> Cursor:
         ''' Context manager that returns a Cursor '''
         return self.cursor()
 
-    def __exit__(self, exc, value, traceback):
+    def __exit__(self, exc: Any, value: Any, traceback: Any) -> None:
         ''' On successful exit, commit. On exception, rollback. '''
         if exc:
             self.rollback()
         else:
             self.commit()
 
-    def __del__(self):
+    def __del__(self) -> None:
         if hasattr(self, 'socket') and self.socket:
             self.socket.close()
             self.socket = None
 
-    def _is_connect(self):
+    def _is_connect(self) -> bool:
         return bool(self.socket)
 
     # The following methods are INTERNAL USE ONLY (called from Cursor)
-    def query(self, sql):
+    def query(self, sql: str | bytes) -> None:
         self._execute_command(COMMAND.COM_QUERY, sql)
         self._result = MySQLResult(self)
         self._result.read_result()
 
-    def next_result(self):
+    def next_result(self) -> None:
         self._result = MySQLResult(self)
         self._result.read_result()
 
-    def affected_rows(self):
+    def affected_rows(self) -> int:
         if self._result:
-            self._result._affected_rows
+            return self._result._affected_rows
         else:
             return 0
 
-    def kill(self, thread_id):
+    def kill(self, thread_id: int) -> bool:
         arg = struct.pack('<I', thread_id)
         try:
             self._execute_command(COMMAND.COM_PROCESS_KILL, arg)
@@ -362,7 +368,7 @@ class Connection(object):
             self.errorhandler(None, exc, value)
         return False
 
-    def ping(self, reconnect=True):
+    def ping(self, reconnect: bool = True) -> bool | None:
         ''' Check if the server is alive '''
         try:
             self._execute_command(COMMAND.COM_PING, "")
@@ -378,7 +384,7 @@ class Connection(object):
         pkt = self.read_packet()
         return pkt.is_ok_packet()
 
-    def set_charset(self, charset):
+    def set_charset(self, charset: str) -> None:
         try:
             if charset:
                 self._execute_command(COMMAND.COM_QUERY, "SET NAMES %s" %
@@ -389,7 +395,7 @@ class Connection(object):
             exc, value, tb = sys.exc_info()
             self.errorhandler(None, exc, value)
 
-    def _get_socket(self):
+    def _get_socket(self) -> socket.socket:
         sock = None
         try:
             if self.unix_socket and (self.host == 'localhost' or self.host == '127.0.0.1'):
@@ -411,21 +417,21 @@ class Connection(object):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         return sock
 
-    def _connect(self):
+    def _connect(self) -> None:
         self.socket = SocketWrapper(self._get_socket(), self.compress)
 
-    def read_packet(self):
+    def read_packet(self) -> MysqlPacket:
         """Read an entire "mysql packet" in its entirety from the network
         and return a MysqlPacket type that represents the results."""
         return MysqlPacket(self.socket.recv_packet(), self.charset, self.encoding)
 
-    def insert_id(self):
+    def insert_id(self) -> int:
         if self._result:
             return self._result.insert_id
         else:
             return 0
 
-    def _execute_command(self, command, sql):
+    def _execute_command(self, command: int, sql: str | bytes) -> None:
         if not self.socket:
             self.errorhandler(None, InterfaceError, (-1, 'socket not found'))
 
@@ -437,7 +443,7 @@ class Connection(object):
         prelude = struct.pack('<i', len(sql)+1) + int2bytes(command)
         self.socket.send_packet(prelude + sql)
 
-    def _scramble(self):
+    def _scramble(self) -> bytes:
         if self.auth_plugin_name in ('', 'mysql_native_password'):
             data = _mysql_native_password_scramble(
                 self.password.encode(self.encoding), self.salt
@@ -454,7 +460,7 @@ class Connection(object):
             )
         return data
 
-    def _request_authentication(self):
+    def _request_authentication(self) -> None:
         if self.user is None:
             raise ValueError("Did not specify a username")
 
@@ -516,7 +522,7 @@ class Connection(object):
         if self.auth_plugin_name == 'caching_sha2_password':
             self._caching_sha2_authentication2(auth_packet, next_packet)
 
-    def _caching_sha2_authentication2(self, auth_packet, next_packet):
+    def _caching_sha2_authentication2(self, auth_packet: bytes, next_packet: int) -> None:
         # https://dev.mysql.com/doc/dev/mysql-server/latest/page_caching_sha2_authentication_exchanges.html
         if auth_packet == b'\x01\x03':   # fast_auth_success
             self.read_packet()
@@ -550,19 +556,19 @@ class Connection(object):
         self.read_packet()
 
     # _mysql support
-    def thread_id(self):
+    def thread_id(self) -> int:
         return self.server_thread_id[0]
 
-    def character_set_name(self):
+    def character_set_name(self) -> str:
         return self.charset
 
-    def get_host_info(self):
+    def get_host_info(self) -> str:
         return self.host_info
 
-    def get_proto_info(self):
+    def get_proto_info(self) -> int:
         return self.protocol_version
 
-    def _get_server_information(self):
+    def _get_server_information(self) -> None:
         # https://dev.mysql.com/doc/internals/en/connection-phase-packets.html#packet-Protocol::Handshake
         i = 0
         data =  self.socket.recv_uncompress_packet()
@@ -602,11 +608,12 @@ class Connection(object):
                 i += rest_salt_len
             self.auth_plugin_name = data[i:data.find(int2bytes(0), i)].decode('utf-8')
 
-    def get_transaction_status(self):
+    def get_transaction_status(self) -> bool:
         return bool(self.server_status & SERVER_STATUS.SERVER_STATUS_IN_TRANS)
 
-    def get_server_info(self):
+    def get_server_info(self) -> str:
         return self.server_version
+
 
     Warning = Warning
     Error = Error
