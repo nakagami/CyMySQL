@@ -10,9 +10,9 @@ cdef class Charsets(object):
     cdef add(self, Charset c)
 
     @cython.locals(c=Charset)
-    cpdef by_name(self, name)
+    cpdef Charset by_name(self, str name)
 
-    cpdef object by_id(self, id)
+    cpdef Charset by_id(self, int id)
 
 cdef Charsets _charsets
 
