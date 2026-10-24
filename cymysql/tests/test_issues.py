@@ -301,8 +301,144 @@ class TestCyMySQLIssues(base.PyMySQLTestCase):
         finally:
             c.execute("drop table issue46")
 
+    def test_issue_50(self):
+        try:
+            from compression import zstd
+        except ImportError:
+            try:
+                import pyzstd as zstd
+            except ImportError:
+                zstd = None
+        if zstd is None:
+            self.skipTest("zstd not available")
 
-__all__ = ["TestOldIssues", "TestNewIssues", "TestGitHubIssues", "TestCyMySQLIssues"]
+        conn = cymysql.connect(
+            host=self.test_host,
+            user="root",
+            passwd=self.test_passwd,
+            db=self.databases[0]["db"],
+            charset="utf8mb4",
+            compression_algorithm="zstd",
+        )
+        try:
+            c = conn.cursor()
+            c.execute("select 1, 'zstd test'")
+            self.assertEqual((1, 'zstd test'), c.fetchone())
+        finally:
+            conn.close()
+
+
+class TestIssue50SocketWrapper(unittest.TestCase):
+    def _pack_packet(self, payload):
+        ln = len(payload)
+        return bytes([ln & 0xFF, (ln >> 8) & 0xFF, (ln >> 16) & 0xFF, 0]) + payload
+
+    def test_zstd_roundtrip_socketwrapper(self):
+        import cymysql.socketwrapper as sw
+        if sw.zstd is None:
+            self.skipTest("zstd not available")
+
+        class MockSocket:
+            def __init__(self):
+                self.send_buf = bytearray()
+                self.recv_buf = bytearray()
+            def sendall(self, data):
+                self.send_buf.extend(data)
+            def recv(self, size):
+                if len(self.recv_buf) < size:
+                    return b''
+                res = bytes(self.recv_buf[:size])
+                del self.recv_buf[:size]
+                return res
+
+        sock = MockSocket()
+        wrapper = sw.SocketWrapper(sock, compress='zstd')
+        payload = b'Test payload with zstd ' * 10
+        wrapper.send_packet(self._pack_packet(payload))
+        sock.recv_buf.extend(sock.send_buf)
+        sock.send_buf.clear()
+        received = wrapper.recv_packet()
+        self.assertEqual(received, payload)
+
+    def test_async_zstd_roundtrip_socketwrapper(self):
+        import asyncio
+        from cymysql.aio.socketwrapper import AsyncSocketWrapper, zstd
+
+        if zstd is None:
+            self.skipTest("zstd not available")
+
+        class MockAsyncLoop:
+            def __init__(self):
+                self.send_buf = bytearray()
+                self.recv_buf = bytearray()
+            async def sock_sendall(self, sock, data):
+                self.send_buf.extend(data)
+            async def sock_recv(self, sock, size):
+                if len(self.recv_buf) < size:
+                    return b''
+                res = bytes(self.recv_buf[:size])
+                del self.recv_buf[:size]
+                return res
+
+        async def _test():
+            loop = MockAsyncLoop()
+            wrapper = AsyncSocketWrapper(None, compress='zstd')
+            payload = b'Async test payload with zstd ' * 10
+            await wrapper.send_packet(self._pack_packet(payload), loop)
+            loop.recv_buf.extend(loop.send_buf)
+            loop.send_buf.clear()
+            received = await wrapper.recv_packet(loop)
+            self.assertEqual(received, payload)
+
+        asyncio.run(_test())
+
+    def test_fallback_when_zstd_is_none(self):
+        import cymysql.socketwrapper as sw
+        original_zstd = sw.zstd
+        try:
+            sw.zstd = None
+
+            class MockSocket:
+                def __init__(self):
+                    self.send_buf = bytearray()
+                    self.recv_buf = bytearray()
+                def sendall(self, data):
+                    self.send_buf.extend(data)
+                def recv(self, size):
+                    if len(self.recv_buf) < size:
+                        return b''
+                    res = bytes(self.recv_buf[:size])
+                    del self.recv_buf[:size]
+                    return res
+
+            # Non-compression should work
+            sock = MockSocket()
+            wrapper = sw.SocketWrapper(sock, compress='')
+            payload = b'Uncompressed payload ' * 5
+            wrapper.send_packet(self._pack_packet(payload))
+            sock.recv_buf.extend(sock.send_buf)
+            sock.send_buf.clear()
+            self.assertEqual(wrapper.recv_packet(), payload)
+
+            # zlib compression should work even if zstd is None
+            sock = MockSocket()
+            wrapper = sw.SocketWrapper(sock, compress='zlib')
+            payload = b'zlib payload ' * 10
+            wrapper.send_packet(self._pack_packet(payload))
+            sock.recv_buf.extend(sock.send_buf)
+            sock.send_buf.clear()
+            self.assertEqual(wrapper.recv_packet(), payload)
+
+            # zstd compression should raise NotImplementedError
+            sock = MockSocket()
+            wrapper = sw.SocketWrapper(sock, compress='zstd')
+            with self.assertRaises(NotImplementedError):
+                wrapper.send_packet(self._pack_packet(payload))
+        finally:
+            sw.zstd = original_zstd
+
+
+__all__ = ["TestOldIssues", "TestNewIssues", "TestGitHubIssues", "TestCyMySQLIssues", "TestIssue50SocketWrapper"]
 
 if __name__ == "__main__":
     import unittest

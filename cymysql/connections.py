@@ -535,7 +535,7 @@ class Connection(object):
     def _caching_sha2_authentication2(self, auth_packet: bytes, next_packet: int) -> None:
         # https://dev.mysql.com/doc/dev/mysql-server/latest/page_caching_sha2_authentication_exchanges.html
         if auth_packet == b'\x01\x03':   # fast_auth_success
-            self.read_packet()
+            self.socket.recv_uncompress_packet()
             return
 
         # perform_full_authentication
@@ -549,7 +549,7 @@ class Connection(object):
             data = pack_int24(len(data)) + int2bytes(next_packet) + data
             next_packet += 2
             self.socket.send_uncompress_packet(data)
-            response = self.read_packet()
+            response = MysqlPacket(self.socket.recv_uncompress_packet(), self.charset, self.encoding)
             public_pem = response.get_all_data()[1:]
 
             from Crypto.PublicKey import RSA
@@ -563,7 +563,7 @@ class Connection(object):
         next_packet += 2
         self.socket.send_uncompress_packet(data)
 
-        self.read_packet()
+        self.socket.recv_uncompress_packet()
 
     # _mysql support
     def thread_id(self) -> int:

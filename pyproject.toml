@@ -26,7 +26,7 @@ classifiers = [
 dynamic = ["version"]
 
 [project.optional-dependencies]
-"zstd" = ["pyzstd"]
+"zstd" = ["pyzstd; python_version < '3.14'"]
 "vector" = ["numpy"]
 
 [project.urls]

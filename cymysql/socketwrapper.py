@@ -1,8 +1,11 @@
 import zlib
 try:
-    import pyzstd
+    from compression import zstd
 except ImportError:
-    pyzstd = None
+    try:
+        import pyzstd as zstd
+    except ImportError:
+        zstd = None
 from cymysql.err import OperationalError
 
 
@@ -43,7 +46,9 @@ class SocketWrapper():
                 if self._compress == "zlib":
                     data = zlib.decompress(data)
                 elif self._compress == "zstd":
-                    data = pyzstd.decompress(data)
+                    if zstd is None:
+                        raise NotImplementedError("zstd compression requires compression.zstd or pyzstd")
+                    data = zstd.decompress(data)
                 assert len(data) == uncompressed_length
             self._decompressed += data
         recv_data, self._decompressed = self._decompressed[:size], self._decompressed[size:]
@@ -76,7 +81,9 @@ class SocketWrapper():
                 if self._compress == "zlib":
                     compressed = zlib.compress(data)
                 elif self._compress == "zstd":
-                    compressed = pyzstd.compress(data)
+                    if zstd is None:
+                        raise NotImplementedError("zstd compression requires compression.zstd or pyzstd")
+                    compressed = zstd.compress(data)
                 compressed_length = len(compressed)
                 if len(data) < compressed_length:
                     compressed = data

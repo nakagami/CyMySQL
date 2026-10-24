@@ -1,8 +1,11 @@
 import zlib
 try:
-    import pyzstd
+    from compression import zstd
 except ImportError:
-    pyzstd = None
+    try:
+        import pyzstd as zstd
+    except ImportError:
+        zstd = None
 from ..socketwrapper import SocketWrapper
 from ..err import OperationalError
 
@@ -34,14 +37,16 @@ class AsyncSocketWrapper(SocketWrapper):
     async def _recv_from_decompressed(self, size, loop):
         if len(self._decompressed) < size:
             compressed_length = unpack_uint24(await self.recv(3, loop))
-            await self.recv(1)  # compressed sequence
+            await self.recv(1, loop)  # compressed sequence
             uncompressed_length = unpack_uint24(await self.recv(3, loop))
             data = await self.recv(compressed_length, loop)
             if uncompressed_length != 0:
                 if self._compress == "zlib":
                     data = zlib.decompress(data)
                 elif self._compress == "zstd":
-                    data = pyzstd.decompress(data)
+                    if zstd is None:
+                        raise NotImplementedError("zstd compression requires compression.zstd or pyzstd")
+                    data = zstd.decompress(data)
                 assert len(data) == uncompressed_length
             self._decompressed += data
         recv_data, self._decompressed = self._decompressed[:size], self._decompressed[size:]
@@ -75,8 +80,10 @@ class AsyncSocketWrapper(SocketWrapper):
             else:
                 if self._compress == "zlib":
                     compressed = zlib.compress(data)
-                elif self._compress == "pyzstd":
-                    compressed = pyzstd.compress(data)
+                elif self._compress == "zstd":
+                    if zstd is None:
+                        raise NotImplementedError("zstd compression requires compression.zstd or pyzstd")
+                    compressed = zstd.compress(data)
                 compressed_length = len(compressed)
                 if len(data) < compressed_length:
                     compressed = data

@@ -210,6 +210,9 @@ class AsyncConnection(Connection):
         if self.server_capabilities & CLIENT.PLUGIN_AUTH:
             data += self.auth_plugin_name.encode(self.encoding) + int2bytes(0)
 
+        if self.server_capabilities & CLIENT.ZSTD_COMPRESSION_ALGORITHM:
+            data += int2bytes(self.zstd_compression_level)
+
         data = pack_int24(len(data)) + int2bytes(next_packet) + data
         next_packet += 2
 
@@ -247,7 +250,7 @@ class AsyncConnection(Connection):
     async def _caching_sha2_authentication2(self, auth_packet: bytes, next_packet: int) -> None:
         # https://dev.mysql.com/doc/dev/mysql-server/latest/page_caching_sha2_authentication_exchanges.html
         if auth_packet == b'\x01\x03':   # fast_auth_success
-            await self.read_packet()
+            await self.socket.recv_uncompress_packet(self.loop)
             return
 
         # perform_full_authentication
@@ -261,7 +264,7 @@ class AsyncConnection(Connection):
             data = pack_int24(len(data)) + int2bytes(next_packet) + data
             next_packet += 2
             await self.socket.send_uncompress_packet(data, self.loop)
-            response = await self.read_packet()
+            response = MysqlPacket(await self.socket.recv_uncompress_packet(self.loop), self.charset, self.encoding)
             public_pem = response.get_all_data()[1:]
 
             from Crypto.PublicKey import RSA
@@ -273,9 +276,9 @@ class AsyncConnection(Connection):
 
         data = pack_int24(len(data)) + int2bytes(next_packet) + data
         next_packet += 2
-        await self.socket.send_packet(data, self.loop)
+        await self.socket.send_uncompress_packet(data, self.loop)
 
-        await self.read_packet()
+        await self.socket.recv_uncompress_packet(self.loop)
 
     async def _get_server_information(self) -> None:
         # https://dev.mysql.com/doc/internals/en/connection-phase-packets.html#packet-Protocol::Handshake
