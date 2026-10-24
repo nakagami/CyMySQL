@@ -1,3 +1,4 @@
+import ssl
 import zlib
 try:
     from compression import zstd
@@ -24,7 +25,21 @@ class AsyncSocketWrapper(SocketWrapper):
     async def recv(self, size, loop):
         r = b''
         while size:
-            recv_data = await loop.sock_recv(self._sock, size)
+            if isinstance(self._sock, ssl.SSLSocket):
+                while True:
+                    try:
+                        recv_data = self._sock.recv(size)
+                        break
+                    except (ssl.SSLWantReadError, BlockingIOError):
+                        future = loop.create_future()
+                        fd = self._sock.fileno()
+                        loop.add_reader(fd, lambda: (loop.remove_reader(fd), not future.done() and future.set_result(None)))
+                        try:
+                            await future
+                        finally:
+                            loop.remove_reader(fd)
+            else:
+                recv_data = await loop.sock_recv(self._sock, size)
             if not recv_data:
                 raise OperationalError(2013, "Lost connection to MySQL server during query")
             size -= len(recv_data)
@@ -68,7 +83,21 @@ class AsyncSocketWrapper(SocketWrapper):
         return recv_data
 
     async def send_uncompress_packet(self, data, loop):
-        await loop.sock_sendall(self._sock, data)
+        if isinstance(self._sock, ssl.SSLSocket):
+            while data:
+                try:
+                    sent = self._sock.send(data)
+                    data = data[sent:]
+                except (ssl.SSLWantWriteError, BlockingIOError):
+                    future = loop.create_future()
+                    fd = self._sock.fileno()
+                    loop.add_writer(fd, lambda: (loop.remove_writer(fd), not future.done() and future.set_result(None)))
+                    try:
+                        await future
+                    finally:
+                        loop.remove_writer(fd)
+        else:
+            await loop.sock_sendall(self._sock, data)
 
     async def send_packet(self, data, loop):
         if self._compress:
@@ -90,4 +119,4 @@ class AsyncSocketWrapper(SocketWrapper):
                     compressed_length = len(compressed)
                     uncompressed_length = 0
             data = pack_int24(compressed_length) + b'\x00' + pack_int24(uncompressed_length) + compressed
-        await loop.sock_sendall(self._sock, data)
+        await self.send_uncompress_packet(data, loop)

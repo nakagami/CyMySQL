@@ -438,8 +438,95 @@ class TestIssue50SocketWrapper(unittest.TestCase):
             sw.zstd = original_zstd
 
 
-__all__ = ["TestOldIssues", "TestNewIssues", "TestGitHubIssues", "TestCyMySQLIssues", "TestIssue50SocketWrapper"]
+__all__ = ["TestOldIssues", "TestNewIssues", "TestGitHubIssues", "TestCyMySQLIssues", "TestIssue50SocketWrapper", "TestIssue30"]
+
+
+class TestIssue30(unittest.TestCase):
+    def test_ssl_options(self):
+        import ssl
+        # Test SSLContext
+        ctx = ssl.create_default_context()
+        conn = cymysql.Connection.__new__(cymysql.Connection)
+        conn.__init__(user='test', ssl=ctx)
+        self.assertTrue(conn.ssl)
+        self.assertIs(conn.ctx, ctx)
+
+        # Test ssl=True
+        conn = cymysql.Connection.__new__(cymysql.Connection)
+        conn.__init__(user='test', ssl=True)
+        self.assertTrue(conn.ssl)
+        self.assertIsInstance(conn.ctx, ssl.SSLContext)
+        self.assertFalse(conn.ctx.check_hostname)
+        self.assertEqual(conn.ctx.verify_mode, ssl.CERT_NONE)
+
+        # Test dict options
+        conn = cymysql.Connection.__new__(cymysql.Connection)
+        conn.__init__(user='test', ssl={'check_hostname': False})
+        self.assertTrue(conn.ssl)
+        self.assertIsInstance(conn.ctx, ssl.SSLContext)
+        self.assertFalse(conn.ctx.check_hostname)
+
+        # Test invalid type
+        with self.assertRaises(TypeError):
+            conn = cymysql.Connection.__new__(cymysql.Connection)
+            conn.__init__(user='test', ssl='invalid')
+
+    def test_ssl_connection_live(self):
+        import ssl
+        try:
+            conn = cymysql.connect(
+                host='127.0.0.1',
+                user='scott',
+                passwd='tiger',
+                db='test_cymysql',
+                ssl={'check_hostname': False},
+            )
+        except Exception as e:
+            self.skipTest(f"Live database not available: {e}")
+
+        try:
+            cur = conn.cursor()
+            cur.execute("SHOW STATUS LIKE 'Ssl_cipher'")
+            row = cur.fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], 'Ssl_cipher')
+            self.assertTrue(len(row[1]) > 0)
+        finally:
+            conn.close()
+
+    def test_async_ssl_connection_live(self):
+        import asyncio
+        import cymysql.aio
+
+        async def _test():
+            try:
+                conn = await cymysql.aio.connect(
+                    host='127.0.0.1',
+                    user='scott',
+                    passwd='tiger',
+                    db='test_cymysql',
+                    ssl={'check_hostname': False},
+                )
+            except Exception as e:
+                return e
+
+            try:
+                cur = conn.cursor()
+                await cur.execute("SHOW STATUS LIKE 'Ssl_cipher'")
+                row = await cur.fetchone()
+                return row
+            finally:
+                await conn.close()
+
+        res = asyncio.run(_test())
+        if isinstance(res, Exception):
+            self.skipTest(f"Live database not available: {res}")
+        self.assertIsNotNone(res)
+        self.assertEqual(res[0], 'Ssl_cipher')
+        self.assertTrue(len(res[1]) > 0)
+
 
 if __name__ == "__main__":
     import unittest
     unittest.main()
+

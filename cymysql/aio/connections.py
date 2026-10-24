@@ -14,7 +14,7 @@ from ..connections import (
     pack_int24,
 )
 from ..constants import CLIENT, COMMAND
-from ..err import InterfaceError
+from ..err import InterfaceError, OperationalError
 from ..packet import MysqlPacket
 from .cursors import AsyncCursor
 from .result import AsyncMySQLResult
@@ -188,13 +188,36 @@ class AsyncConnection(Connection):
             int2bytes(charset_id) + int2bytes(0)*23
         )
 
-        if self.ssl and self.server_capabilities & CLIENT.SSL:
+        if self.ssl:
+            if not (self.server_capabilities & CLIENT.SSL):
+                raise OperationalError(2047, "Server does not support SSL")
             data = pack_int24(len(data_init)) + int2bytes(next_packet) + data_init
             await self.socket.send_uncompress_packet(data, self.loop)
             next_packet += 1
-            self.socket = ssl.wrap_socket(self.socket, keyfile=self.key,
-                                          certfile=self.cert,
-                                          ca_certs=self.ca)
+            server_hostname = self.host if (self.ctx and self.ctx.check_hostname) else None
+            self.socket._sock = self.ctx.wrap_socket(
+                self.socket._sock, server_hostname=server_hostname, do_handshake_on_connect=False
+            )
+            while True:
+                try:
+                    self.socket._sock.do_handshake()
+                    break
+                except (ssl.SSLWantReadError, BlockingIOError):
+                    future = self.loop.create_future()
+                    fd = self.socket._sock.fileno()
+                    self.loop.add_reader(fd, lambda: (self.loop.remove_reader(fd), not future.done() and future.set_result(None)))
+                    try:
+                        await future
+                    finally:
+                        self.loop.remove_reader(fd)
+                except ssl.SSLWantWriteError:
+                    future = self.loop.create_future()
+                    fd = self.socket._sock.fileno()
+                    self.loop.add_writer(fd, lambda: (self.loop.remove_writer(fd), not future.done() and future.set_result(None)))
+                    try:
+                        await future
+                    finally:
+                        self.loop.remove_writer(fd)
 
         data = data_init + user + int2bytes(0)
         authresp = self._scramble()

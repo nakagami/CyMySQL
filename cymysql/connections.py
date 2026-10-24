@@ -6,7 +6,7 @@ import getpass
 import hashlib
 import os
 import socket
-import ssl
+import ssl as _ssl
 import stat
 import struct
 import sys
@@ -154,9 +154,6 @@ class Connection(object):
         if named_pipe:
             raise NotImplementedError("named_pipe argument are not supported")
 
-        if ssl and ('capath' in ssl or 'cipher' in ssl):
-            raise NotImplementedError('ssl options capath and cipher are not supported')
-
         if compression_algorithm and compression_algorithm not in ("zlib", "zstd"):
             raise NotImplementedError('compression_algorithm argument can set zlib or zstd')
 
@@ -164,14 +161,34 @@ class Connection(object):
         self.zstd_compression_level = zstd_compression_level
         self.socket = None
         self.ssl = False
+        self.ctx = None
         if ssl:
             self.ssl = True
             client_flag |= CLIENT.SSL
-            for k in ('key', 'cert', 'ca'):
-                v = None
-                if k in ssl:
-                    v = ssl[k]
-                setattr(self, k, v)
+            if isinstance(ssl, _ssl.SSLContext):
+                self.ctx = ssl
+            elif isinstance(ssl, dict):
+                ca = ssl.get('ca')
+                capath = ssl.get('capath')
+                cert = ssl.get('cert')
+                key = ssl.get('key')
+                cipher = ssl.get('cipher')
+                check_hostname = ssl.get('check_hostname', False)
+                self.ctx = _ssl.create_default_context(cafile=ca, capath=capath)
+                self.ctx.check_hostname = check_hostname
+                if not check_hostname and not ca:
+                    self.ctx.check_hostname = False
+                    self.ctx.verify_mode = _ssl.CERT_NONE
+                if cert:
+                    self.ctx.load_cert_chain(cert, key)
+                if cipher:
+                    self.ctx.set_ciphers(cipher)
+            elif ssl is True:
+                self.ctx = _ssl.create_default_context()
+                self.ctx.check_hostname = False
+                self.ctx.verify_mode = _ssl.CERT_NONE
+            else:
+                raise TypeError(f"Invalid ssl argument type: {type(ssl)}")
 
         if read_default_group and not read_default_file:
             if sys.platform.startswith("win"):
@@ -485,13 +502,14 @@ class Connection(object):
             int2bytes(charset_id) + int2bytes(0)*23
         )
 
-        if self.ssl and self.server_capabilities & CLIENT.SSL:
+        if self.ssl:
+            if not (self.server_capabilities & CLIENT.SSL):
+                raise OperationalError(2047, "Server does not support SSL")
             data = pack_int24(len(data_init)) + int2bytes(next_packet) + data_init
             self.socket.send_uncompress_packet(data)
             next_packet += 1
-            self.socket = ssl.wrap_socket(self.socket, keyfile=self.key,
-                                          certfile=self.cert,
-                                          ca_certs=self.ca)
+            server_hostname = self.host if (self.ctx and self.ctx.check_hostname) else None
+            self.socket._sock = self.ctx.wrap_socket(self.socket._sock, server_hostname=server_hostname)
 
         data = data_init + user + int2bytes(0)
         authresp = self._scramble()
