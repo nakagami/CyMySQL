@@ -256,6 +256,7 @@ class Connection(object):
         self.connect_timeout = connect_timeout
         self.messages = []
         self._result = None
+        self._last_execute_cursor = None
         self.autocommit_mode = False
 
         self.sql_mode = sql_mode

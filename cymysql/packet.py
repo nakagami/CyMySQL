@@ -221,6 +221,20 @@ class MysqlPacket(object):
         return plugin_name, salt
 
 
+_FIELD_STRUCT = struct.Struct('<xHIBHBxx')
+_CHARSETNR_CACHE = {}
+
+
+def _get_charset_and_encoding(charsetnr):
+    res = _CHARSETNR_CACHE.get(charsetnr)
+    if res is None:
+        c = charset_by_id(charsetnr).name
+        e = encoding_by_charset(c)
+        res = (c, e)
+        _CHARSETNR_CACHE[charsetnr] = res
+    return res
+
+
 class FieldDescriptorPacket(MysqlPacket):
     """A MysqlPacket that represents a specific column's metadata in the result.
 
@@ -242,17 +256,31 @@ class FieldDescriptorPacket(MysqlPacket):
         self.org_table = self._read_length_coded_string()
         self.name = self._read_length_coded_string().decode(self._encoding)
         self.org_name = self._read_length_coded_string()
-        self._skip(1)  # non-null filler
-        self.charsetnr = self._read_uint16()
-        self.charset = charset_by_id(self.charsetnr).name
-        self.encoding = encoding_by_charset(self.charset)
-        self.length = self._read_uint32()
-        self.type_code = self._read_uint8()
-        self.flags = self._read_uint16()
+        pos = self._MysqlPacket__position
+        (
+            self.charsetnr,
+            self.length,
+            self.type_code,
+            self.flags,
+            self.scale,
+        ) = _FIELD_STRUCT.unpack_from(self._MysqlPacket__data, pos)
+        self._MysqlPacket__position = pos + 13
         self.is_set = self.flags & FLAG.SET
         self.is_binary = self.flags & FLAG.BINARY
-        self.scale = self._read_uint8()  # "decimals"
-        self._skip(2)  # filler (always 0x00)
+        self._field_charset = None
+        self._field_encoding = None
+
+    @property
+    def charset(self):
+        if self._field_charset is None:
+            self._field_charset, self._field_encoding = _get_charset_and_encoding(self.charsetnr)
+        return self._field_charset
+
+    @property
+    def encoding(self):
+        if self._field_encoding is None:
+            self._field_charset, self._field_encoding = _get_charset_and_encoding(self.charsetnr)
+        return self._field_encoding
 
     def description(self):
         """Provides a 7-item tuple compatible with the Python PEP249 DB Spec."""

@@ -118,9 +118,10 @@ class Cursor(object):
 
     def _escape_args(self, args: Any, conn: Any) -> Any:
         if isinstance(args, (tuple, list)):
-            return tuple(conn.escape(arg) for arg in args)
+            return tuple(map(conn.escape, args))
         elif isinstance(args, dict):
-            return dict((key, conn.escape(val)) for (key, val) in args.items())
+            escape = conn.escape
+            return {key: escape(val) for (key, val) in args.items()}
         else:
             return conn.escape(args)
 
@@ -129,11 +130,15 @@ class Cursor(object):
         self._rowcount = None
 
         conn = self._get_db()
-        if hasattr(conn, '_last_execute_cursor') and not conn._last_execute_cursor() is None:
-            conn._last_execute_cursor()._flush()
+        last_cursor = getattr(conn, '_last_execute_cursor', None)
+        if last_cursor is not None:
+            c = last_cursor()
+            if c is not None:
+                c._flush()
 
         encoding = conn.encoding
-        del self.messages[:]
+        if self.messages:
+            self.messages.clear()
 
         if not isinstance(query, str):
             query = query.decode(encoding)
@@ -156,29 +161,32 @@ class Cursor(object):
         self, prefix: str, values: str, postfix: str, args: Sequence[Any], max_stmt_length: int
     ) -> int:
         conn = self._get_db()
-        sql = [prefix]
+        escape = conn.escape
+        batch_values: list[str] = []
         cur_len = len(prefix) + len(postfix)
         rowcount = 0
-        first = True
 
         for arg in args:
-            escaped_val = values % self._escape_args(arg, conn)
-            val_len = len(escaped_val) + (0 if first else 1)
-            if not first and cur_len + val_len > max_stmt_length:
-                self.execute("".join(sql) + postfix)
+            if isinstance(arg, (tuple, list)):
+                escaped_val = values % tuple(map(escape, arg))
+            elif isinstance(arg, dict):
+                escaped_val = values % {k: escape(v) for k, v in arg.items()}
+            else:
+                escaped_val = values % escape(arg)
+
+            val_len = len(escaped_val) + (1 if batch_values else 0)
+            if batch_values and cur_len + val_len > max_stmt_length:
+                self.execute(prefix + ",".join(batch_values) + postfix)
                 if self.rowcount != -1:
                     rowcount += self.rowcount
-                sql = [prefix, escaped_val]
+                batch_values = [escaped_val]
                 cur_len = len(prefix) + len(postfix) + len(escaped_val)
             else:
-                if not first:
-                    sql.append(",")
-                sql.append(escaped_val)
+                batch_values.append(escaped_val)
                 cur_len += val_len
-                first = False
 
-        if not first:
-            self.execute("".join(sql) + postfix)
+        if batch_values:
+            self.execute(prefix + ",".join(batch_values) + postfix)
             if self.rowcount != -1:
                 rowcount += self.rowcount
 

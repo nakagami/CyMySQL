@@ -29,4 +29,4 @@ cdef class MysqlPacket(object):
 cdef class FieldDescriptorPacket(MysqlPacket):
     cdef public object catalog, db, table_name, org_table, name, org_name
     cdef public int charsetnr, length, type_code, flags, scale, is_set, is_binary
-    cdef public str charset, encoding
+    cdef str _field_charset, _field_encoding
