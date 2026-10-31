@@ -90,8 +90,10 @@ class AsyncCursor(Cursor):
         rowcount = 0
 
         for arg in args:
-            if isinstance(arg, (tuple, list)):
-                escaped_val = values % tuple(map(escape, arg))
+            if type(arg) is tuple:
+                escaped_val = values % tuple([escape(v) for v in arg])
+            elif isinstance(arg, (tuple, list)):
+                escaped_val = values % tuple([escape(v) for v in arg])
             elif isinstance(arg, dict):
                 escaped_val = values % {k: escape(v) for k, v in arg.items()}
             else:

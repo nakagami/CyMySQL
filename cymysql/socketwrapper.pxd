@@ -8,3 +8,5 @@ cdef class SocketWrapper:
     cpdef recv(self, int size)
     cdef bytes _recv_from_decompressed(self, int size)
     cpdef recv_packet(self)
+    cpdef send_packet(self, data)
+    cpdef send_uncompress_packet(self, data)

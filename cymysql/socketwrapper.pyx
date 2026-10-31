@@ -145,10 +145,10 @@ cdef class SocketWrapper():
                     break
         return recv_data
 
-    def send_uncompress_packet(self, data):
+    cpdef send_uncompress_packet(self, data):
         self._sock.sendall(data)
 
-    def send_packet(self, data):
+    cpdef send_packet(self, data):
         cdef int uncompressed_length
         cdef int compressed_length
 

@@ -19,7 +19,7 @@ except ImportError:
 from cymysql.charset import charset_by_name, encoding_by_charset
 from cymysql.cursors import Cursor
 from cymysql.constants import CLIENT, COMMAND, CR, SERVER_STATUS
-from cymysql.converters import decoders, encoders, escape_item
+from cymysql.converters import decoders, encoders, escape_item, ESCAPE_TABLE
 from cymysql.err import Warning, Error, \
      InterfaceError, DataError, DatabaseError, OperationalError, \
      IntegrityError, InternalError, NotSupportedError, ProgrammingError
@@ -332,6 +332,15 @@ class Connection(object):
 
     def escape(self, obj: Any) -> Any:
         ''' Escape whatever value you pass to it  '''
+        t = type(obj)
+        if t is str:
+            return f"'{obj.translate(ESCAPE_TABLE)}'"
+        elif t is int:
+            return str(obj)
+        elif t is float:
+            return ('%.15g' % obj)
+        elif obj is None:
+            return 'NULL'
         return escape_item(obj, self.charset, self.encoders)
 
     def literal(self, obj: Any) -> Any:

@@ -117,13 +117,15 @@ class Cursor(object):
         return True
 
     def _escape_args(self, args: Any, conn: Any) -> Any:
-        if isinstance(args, (tuple, list)):
-            return tuple(map(conn.escape, args))
+        escape = conn.escape
+        if type(args) is tuple:
+            return tuple([escape(v) for v in args])
+        elif isinstance(args, (tuple, list)):
+            return tuple([escape(v) for v in args])
         elif isinstance(args, dict):
-            escape = conn.escape
             return {key: escape(val) for (key, val) in args.items()}
         else:
-            return conn.escape(args)
+            return escape(args)
 
     def execute(self, query: str | bytes, args: Sequence[Any] | dict[str, Any] | Any | None = None) -> None:
         ''' Execute a query '''
@@ -167,8 +169,10 @@ class Cursor(object):
         rowcount = 0
 
         for arg in args:
-            if isinstance(arg, (tuple, list)):
-                escaped_val = values % tuple(map(escape, arg))
+            if type(arg) is tuple:
+                escaped_val = values % tuple([escape(v) for v in arg])
+            elif isinstance(arg, (tuple, list)):
+                escaped_val = values % tuple([escape(v) for v in arg])
             elif isinstance(arg, dict):
                 escaped_val = values % {k: escape(v) for k, v in arg.items()}
             else:
