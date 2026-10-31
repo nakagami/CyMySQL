@@ -43,9 +43,17 @@ class MysqlPacket(object):
         self._encoding = encoding
         self.__position = 0
         self.__data = data
-        if self.__data[0] == 0xff:
+        if self.__data and self.__data[0] == 0xff:
             self.__position += 1  # field_count == error (we already know that)
             self._read_uint16()   # errno
+            raise_mysql_exception(self.__data)
+
+    def reset(self, data):
+        self.__data = data
+        self.__position = 0
+        if self.__data and self.__data[0] == 0xff:
+            self.__position += 1
+            self._read_uint16()
             raise_mysql_exception(self.__data)
 
     def get_all_data(self):
@@ -131,11 +139,31 @@ class MysqlPacket(object):
         (unsigned, positive) integer represented in 1-9 bytes followed by
         that many bytes of binary data.  (For example "cat" would be "3cat".)
         """
-        length = self.read_length_coded_binary()
-        if length is None:
-            return None
         pos = self.__position
-        self.__position = pos + length
+        c = self.__data[pos]
+        self.__position = pos + 1
+        if c < UNSIGNED_CHAR_COLUMN:
+            ln = c
+        elif c == UNSIGNED_CHAR_COLUMN:
+            return None
+        elif c == UNSIGNED_SHORT_COLUMN:
+            p = self.__position
+            self.__position = p + 2
+            ln = self.__data[p] | (self.__data[p+1] << 8)
+        elif c == UNSIGNED_INT24_COLUMN:
+            p = self.__position
+            self.__position = p + 3
+            ln = self.__data[p] | (self.__data[p+1] << 8) | (self.__data[p+2] << 16)
+        elif c == UNSIGNED_INT64_COLUMN:
+            p = self.__position
+            self.__position = p + 8
+            b = self.__data
+            ln = (b[p] | (b[p+1] << 8) | (b[p+2] << 16) | (b[p+3] << 24) |
+                  (b[p+4] << 32) | (b[p+5] << 40) | (b[p+6] << 48) | (b[p+7] << 56))
+        else:
+            ln = c
+        pos = self.__position
+        self.__position = pos + ln
         return self.__data[pos:self.__position]
 
     def read_decode_data(self, fields, decoders):
@@ -155,12 +183,13 @@ class MysqlPacket(object):
                     else:
                         row.append(val)
         else:
-            for d in decoders:
+            n = len(decoders)
+            row = [None] * n
+            for i in range(n):
                 val = self._read_length_coded_string()
-                if val is None:
-                    row.append(None)
-                else:
-                    row.append(d(val) if d is not None else val)
+                if val is not None:
+                    d = decoders[i]
+                    row[i] = d(val) if d is not None else val
         return tuple(row)
 
     def is_ok_packet(self):

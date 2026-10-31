@@ -56,7 +56,7 @@ class AsyncSocketWrapper(SocketWrapper):
             self._buf_pos = 0
             size -= buf_len
 
-        read_size = 16384 if isinstance(self._sock, (socket.socket, ssl.SSLSocket)) else size
+        read_size = 65536 if isinstance(self._sock, (socket.socket, ssl.SSLSocket)) else size
         while size > 0:
             chunk = await self._sock_recv(max(size, read_size), loop)
             if not chunk:
@@ -101,6 +101,18 @@ class AsyncSocketWrapper(SocketWrapper):
             ln = unpack_uint24(await self._recv_from_decompressed(4, loop))
             recv_data = await self._recv_from_decompressed(ln, loop)
         else:
+            buf_len = len(self._buf) - self._buf_pos
+            if buf_len >= 4:
+                pos = self._buf_pos
+                ln = self._buf[pos] | (self._buf[pos+1] << 8) | (self._buf[pos+2] << 16)
+                if buf_len >= 4 + ln and ln < 0xffffff:
+                    recv_data = bytes(memoryview(self._buf)[pos+4:pos+4+ln])
+                    self._buf_pos = pos + 4 + ln
+                    if self._buf_pos == len(self._buf):
+                        self._buf.clear()
+                        self._buf_pos = 0
+                    return recv_data
+
             while True:
                 ln = int.from_bytes((await self.recv(4, loop))[:3], "little")
                 recv_data += await self.recv(ln, loop)

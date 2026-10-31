@@ -76,21 +76,29 @@ cdef class MySQLResult(object):
         cdef int is_eof, warning_count, server_status
         if (not self.has_result) or (self.rest_rows is not None):
             return
-        rest_rows = []
-        decoder = self._decoders if self._decoders is not None else self.connection.conv
+        cdef list rest_rows = []
+        cdef object decoder = self._decoders if self._decoders is not None else self.connection.conv
+        cdef object sock = self.connection.socket
+        cdef object charset = self.connection.charset
+        cdef object encoding = self.connection.encoding
+        cdef object fields = self.fields
+        cdef bytes pkt_data
+        cdef const unsigned char* buf
+        cdef object packet = MysqlPacket(b'', charset, encoding)
+
         while True:
-            packet = MysqlPacket(
-                self.connection.socket.recv_packet(),
-                self.connection.charset,
-                self.connection.encoding,
-            )
-            is_eof, warning_count, server_status = packet.is_eof_and_status()
-            if is_eof:
-                self.warning_count = warning_count
-                self.server_status = server_status
-                self.has_next = (server_status & SERVER_MORE_RESULTS_EXISTS)
-                break
-            rest_rows.append(packet.read_decode_data(self.fields, decoder))
+            pkt_data = sock.recv_packet()
+            buf = <const unsigned char*>pkt_data
+            if buf[0] == 0xfe and len(pkt_data) < 9:
+                packet.reset(pkt_data)
+                is_eof, warning_count, server_status = packet.is_eof_and_status()
+                if is_eof:
+                    self.warning_count = warning_count
+                    self.server_status = server_status
+                    self.has_next = (server_status & SERVER_MORE_RESULTS_EXISTS)
+                    break
+            packet.reset(pkt_data)
+            rest_rows.append(packet.read_decode_data(fields, decoder))
         self.rest_rows = rest_rows
         self.rest_row_index = 0
 

@@ -8,6 +8,8 @@ from cymysql.constants import SERVER_STATUS, FLAG
 from cymysql.converters import convert_characters, convert_json
 from cymysql.charset import charset_by_id, encoding_by_charset
 from libc.stdint cimport uint16_t, uint32_t, uint64_t
+from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
+from cpython.ref cimport Py_INCREF
 
 
 cdef int FIELD_TYPE_VAR_STRING = 253
@@ -53,11 +55,26 @@ cdef class MysqlPacket(object):
         self._encoding = encoding
         self.__position = 0
         self.__data = data
-        self.__buf = <const unsigned char*>self.__data
-        if self.__buf[0] == 0xff:
-            self.__position += 1  # field_count == error (we already know that)
-            self._read_uint16()   # errno
-            raise_mysql_exception(self.__data)
+        if data:
+            self.__buf = <const unsigned char*>self.__data
+            if self.__buf[0] == 0xff:
+                self.__position += 1  # field_count == error (we already know that)
+                self._read_uint16()   # errno
+                raise_mysql_exception(self.__data)
+        else:
+            self.__buf = NULL
+
+    cpdef reset(self, bytes data):
+        self.__data = data
+        self.__position = 0
+        if data:
+            self.__buf = <const unsigned char*>self.__data
+            if self.__buf[0] == 0xff:
+                self.__position += 1
+                self._read_uint16()
+                raise_mysql_exception(self.__data)
+        else:
+            self.__buf = NULL
 
     def get_all_data(self):
         return self.__data
@@ -140,6 +157,38 @@ cdef class MysqlPacket(object):
         else:
             return c
 
+    cdef inline int _read_length_coded_string_length(self):
+        cdef int pos = self.__position
+        cdef unsigned char c = self.__buf[pos]
+        self.__position = pos + 1
+        if c < UNSIGNED_CHAR_COLUMN:
+            return c
+        elif c == UNSIGNED_CHAR_COLUMN:
+            return -1
+        elif c == UNSIGNED_SHORT_COLUMN:
+            pos = self.__position
+            self.__position = pos + 2
+            return self.__buf[pos] | (self.__buf[pos+1] << 8)
+        elif c == UNSIGNED_INT24_COLUMN:
+            pos = self.__position
+            self.__position = pos + 3
+            return self.__buf[pos] | (self.__buf[pos+1] << 8) | (self.__buf[pos+2] << 16)
+        elif c == UNSIGNED_INT64_COLUMN:
+            pos = self.__position
+            self.__position = pos + 8
+            return <int>(
+                (<uint64_t>self.__buf[pos]) |
+                ((<uint64_t>self.__buf[pos+1]) << 8) |
+                ((<uint64_t>self.__buf[pos+2]) << 16) |
+                ((<uint64_t>self.__buf[pos+3]) << 24) |
+                ((<uint64_t>self.__buf[pos+4]) << 32) |
+                ((<uint64_t>self.__buf[pos+5]) << 40) |
+                ((<uint64_t>self.__buf[pos+6]) << 48) |
+                ((<uint64_t>self.__buf[pos+7]) << 56)
+            )
+        else:
+            return c
+
     cdef bytes _read_length_coded_string(self):
         """Read a 'Length Coded String' from the data buffer.
 
@@ -147,42 +196,52 @@ cdef class MysqlPacket(object):
         (unsigned, positive) integer represented in 1-9 bytes followed by
         that many bytes of binary data.  (For example "cat" would be "3cat".)
         """
-        cdef object length = self.read_length_coded_binary()
-        if length is None:
+        cdef int ln = self._read_length_coded_string_length()
+        if ln < 0:
             return None
         cdef int pos = self.__position
-        self.__position = pos + <int>length
-        return self.__data[pos:self.__position]
+        self.__position = pos + ln
+        return self.__data[pos:pos+ln]
 
     cpdef read_decode_data(self, fields, decoders):
-        cdef list row = []
-        cdef object val, d, f
+        cdef list row_l
+        cdef tuple row_t
+        cdef object val, d, f, res
         cdef int i, n
         if isinstance(decoders, dict):
+            row_l = []
             n = len(fields)
             for i in range(n):
                 val = self._read_length_coded_string()
                 if val is None:
-                    row.append(None)
+                    row_l.append(None)
                 else:
                     f = fields[i]
                     d = decoders.get(f.type_code)
                     if d in (convert_characters, convert_json):
-                        row.append(d(val, self._encoding, f))
+                        row_l.append(d(val, self._encoding, f))
                     elif d is not None:
-                        row.append(d(val))
+                        row_l.append(d(val))
                     else:
-                        row.append(val)
+                        row_l.append(val)
+            return tuple(row_l)
         else:
             n = len(decoders)
+            row_t = PyTuple_New(n)
             for i in range(n):
                 val = self._read_length_coded_string()
                 if val is None:
-                    row.append(None)
+                    Py_INCREF(None)
+                    PyTuple_SET_ITEM(row_t, i, None)
                 else:
                     d = decoders[i]
-                    row.append(d(val) if d is not None else val)
-        return tuple(row)
+                    if d is not None:
+                        res = d(val)
+                    else:
+                        res = val
+                    Py_INCREF(res)
+                    PyTuple_SET_ITEM(row_t, i, res)
+            return row_t
 
     cpdef is_ok_packet(self):
         return (<unsigned char>(self.__buf[0])) == 0

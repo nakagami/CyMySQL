@@ -10,6 +10,7 @@ except ImportError:
         zstd = None
 from cymysql.err import OperationalError
 from libc.stdint cimport uint16_t, uint32_t
+from cpython.bytes cimport PyBytes_FromStringAndSize
 
 
 cdef bytes pack_int24(int n):
@@ -56,7 +57,7 @@ cdef class SocketWrapper():
             self._buf_pos = 0
             size -= buf_len
 
-        read_size = 16384 if isinstance(self._sock, socket.socket) else size
+        read_size = 65536 if isinstance(self._sock, socket.socket) else size
         while size > 0:
             recv_data = self._sock.recv(max(size, read_size))
             if not recv_data:
@@ -96,14 +97,28 @@ cdef class SocketWrapper():
         recv_data, self._decompressed = self._decompressed[:size], self._decompressed[size:]
         return recv_data
 
-    def recv_packet(self):
+    cpdef recv_packet(self):
         """Read entire mysql packet."""
         cdef bytes recv_data = b''
-        cdef int ln
+        cdef int ln, pos, buf_len
+        cdef const unsigned char* b
         if self._compress:
             ln = unpack_uint24(self._recv_from_decompressed(4))
             recv_data = self._recv_from_decompressed(ln)
         else:
+            buf_len = len(self._buf) - self._buf_pos
+            if buf_len >= 4:
+                pos = self._buf_pos
+                b = <const unsigned char*>self._buf
+                ln = b[pos] | (b[pos+1] << 8) | (b[pos+2] << 16)
+                if buf_len >= 4 + ln and ln < 0xffffff:
+                    recv_data = PyBytes_FromStringAndSize(<const char*>b + pos + 4, ln)
+                    self._buf_pos = pos + 4 + ln
+                    if self._buf_pos == len(self._buf):
+                        self._buf.clear()
+                        self._buf_pos = 0
+                    return recv_data
+
             while True:
                 recv_data += self.recv(unpack_uint24(self.recv(4)))
                 if recv_data[:3] != b'\xff\xff\xff':

@@ -35,19 +35,24 @@ class AsyncMySQLResult(MySQLResult):
             return
         rest_rows = []
         decoder = self._decoders if self._decoders is not None else self.connection.conv
+        sock = self.connection.socket
+        charset = self.connection.charset
+        encoding = self.connection.encoding
+        fields = self.fields
+        loop = self.connection.loop
+        packet = MysqlPacket(b'', charset, encoding)
         while True:
-            packet = MysqlPacket(
-                await self.connection.socket.recv_packet(self.connection.loop),
-                self.connection.charset,
-                self.connection.encoding,
-            )
-            is_eof, warning_count, server_status = packet.is_eof_and_status()
-            if is_eof:
-                self.warning_count = warning_count
-                self.server_status = server_status
-                self.has_next = (server_status & SERVER_MORE_RESULTS_EXISTS)
-                break
-            rest_rows.append(packet.read_decode_data(self.fields, decoder))
+            pkt_data = await sock.recv_packet(loop)
+            if pkt_data[0] == 0xfe and len(pkt_data) < 9:
+                packet.reset(pkt_data)
+                is_eof, warning_count, server_status = packet.is_eof_and_status()
+                if is_eof:
+                    self.warning_count = warning_count
+                    self.server_status = server_status
+                    self.has_next = (server_status & SERVER_MORE_RESULTS_EXISTS)
+                    break
+            packet.reset(pkt_data)
+            rest_rows.append(packet.read_decode_data(fields, decoder))
         self.rest_rows = rest_rows
         self.rest_row_index = 0
 

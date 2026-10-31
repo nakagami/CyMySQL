@@ -43,7 +43,7 @@ class SocketWrapper():
             self._buf_pos = 0
             size -= buf_len
 
-        read_size = 16384 if isinstance(self._sock, socket.socket) else size
+        read_size = 65536 if isinstance(self._sock, socket.socket) else size
         while size > 0:
             recv_data = self._sock.recv(max(size, read_size))
             if not recv_data:
@@ -88,6 +88,18 @@ class SocketWrapper():
             ln = unpack_uint24(self._recv_from_decompressed(4))
             recv_data = self._recv_from_decompressed(ln)
         else:
+            buf_len = len(self._buf) - self._buf_pos
+            if buf_len >= 4:
+                pos = self._buf_pos
+                ln = self._buf[pos] | (self._buf[pos+1] << 8) | (self._buf[pos+2] << 16)
+                if buf_len >= 4 + ln and ln < 0xffffff:
+                    recv_data = bytes(memoryview(self._buf)[pos+4:pos+4+ln])
+                    self._buf_pos = pos + 4 + ln
+                    if self._buf_pos == len(self._buf):
+                        self._buf.clear()
+                        self._buf_pos = 0
+                    return recv_data
+
             while True:
                 recv_data += self.recv(unpack_uint24(self.recv(4)))
                 if recv_data[:3] != b'\xff\xff\xff':
