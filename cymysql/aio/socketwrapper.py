@@ -1,3 +1,4 @@
+import socket
 import ssl
 import zlib
 try:
@@ -39,20 +40,36 @@ class AsyncSocketWrapper(SocketWrapper):
             return await loop.sock_recv(self._sock, size)
 
     async def recv(self, size, loop):
-        chunk = await self._sock_recv(size, loop)
-        if not chunk:
-            raise OperationalError(2013, "Lost connection to MySQL server during query")
-        if len(chunk) == size:
-            return chunk
+        buf_len = len(self._buf) - self._buf_pos
+        if buf_len >= size:
+            res = bytes(self._buf[self._buf_pos:self._buf_pos + size])
+            self._buf_pos += size
+            if self._buf_pos == len(self._buf):
+                self._buf.clear()
+                self._buf_pos = 0
+            return res
 
-        chunks = [chunk]
-        size -= len(chunk)
+        chunks = []
+        if buf_len > 0:
+            chunks.append(bytes(self._buf[self._buf_pos:]))
+            self._buf.clear()
+            self._buf_pos = 0
+            size -= buf_len
+
+        read_size = 16384 if isinstance(self._sock, (socket.socket, ssl.SSLSocket)) else size
         while size > 0:
-            chunk = await self._sock_recv(size, loop)
+            chunk = await self._sock_recv(max(size, read_size), loop)
             if not chunk:
                 raise OperationalError(2013, "Lost connection to MySQL server during query")
-            chunks.append(chunk)
-            size -= len(chunk)
+            chunk_len = len(chunk)
+            if chunk_len <= size:
+                chunks.append(chunk)
+                size -= chunk_len
+            else:
+                chunks.append(chunk[:size])
+                self._buf = bytearray(chunk[size:])
+                self._buf_pos = 0
+                size = 0
 
         return b''.join(chunks)
 

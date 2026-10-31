@@ -114,20 +114,10 @@ def convert_datetime(obj: str | bytes) -> datetime.datetime | datetime.date | No
     """
     if not isinstance(obj, str):
         obj = obj.decode('ascii')
-    if ' ' in obj:
-        sep = ' '
-    elif 'T' in obj:
-        sep = 'T'
-    else:
+    if ' ' not in obj and 'T' not in obj:
         return convert_date(obj)
-
     try:
-        ymd, hms = obj.split(sep, 1)
-        if '.' in hms:
-            hms, usecs = hms.split('.')
-            return datetime.datetime(
-                *[int(x) for x in ymd.split('-')+hms.split(':')+[float('0.' + usecs) * 1e6]])
-        return datetime.datetime(*[int(x) for x in ymd.split('-')+hms.split(':')])
+        return datetime.datetime.fromisoformat(obj)
     except ValueError:
         return convert_date(obj)
 
@@ -189,14 +179,10 @@ def convert_time(obj: str | bytes) -> datetime.time | None:
     to be treated as time-of-day and not a time offset, then you can
     use set this function as the converter for FIELD_TYPE.TIME.
     """
+    if not isinstance(obj, str):
+        obj = obj.decode('ascii')
     try:
-        microseconds = 0
-        if "." in obj:
-            (obj, tail) = obj.split('.')
-            microseconds = int(tail)
-        hours, minutes, seconds = obj.split(':')
-        return datetime.time(hour=int(hours), minute=int(minutes),
-                             second=int(seconds), microsecond=microseconds)
+        return datetime.time.fromisoformat(obj)
     except ValueError:
         return None
 
@@ -218,7 +204,7 @@ def convert_date(obj: str | bytes) -> datetime.date | None:
     if not isinstance(obj, str):
         obj = obj.decode('ascii')
     try:
-        return datetime.date(*[int(x) for x in obj.split('-', 2)])
+        return datetime.date.fromisoformat(obj)
     except ValueError:
         return None
 

@@ -1,3 +1,4 @@
+import socket
 import sys
 import zlib
 try:
@@ -24,26 +25,52 @@ cdef class SocketWrapper():
     cdef public object _sock
     cdef public object _compress
     cdef public object _decompressed
+    cdef public bytearray _buf
+    cdef public int _buf_pos
 
     def __init__(self, sock, compress):
         self._sock = sock
         self._compress = compress
         self._decompressed = b''
+        self._buf = bytearray()
+        self._buf_pos = 0
 
     cpdef recv(self, int size):
-        cdef bytes recv_data = self._sock.recv(size)
-        if not recv_data:
-            raise OperationalError(2013, "Lost connection to MySQL server during query")
-        if len(recv_data) == size:
-            return recv_data
-        cdef list chunks = [recv_data]
-        size -= len(recv_data)
-        while size:
-            recv_data = self._sock.recv(size)
+        cdef int buf_len = len(self._buf) - self._buf_pos
+        cdef bytes res, recv_data
+        cdef list chunks
+        cdef int chunk_len, read_size
+
+        if buf_len >= size:
+            res = bytes(self._buf[self._buf_pos:self._buf_pos + size])
+            self._buf_pos += size
+            if self._buf_pos == len(self._buf):
+                self._buf.clear()
+                self._buf_pos = 0
+            return res
+
+        chunks = []
+        if buf_len > 0:
+            chunks.append(bytes(self._buf[self._buf_pos:]))
+            self._buf.clear()
+            self._buf_pos = 0
+            size -= buf_len
+
+        read_size = 16384 if isinstance(self._sock, socket.socket) else size
+        while size > 0:
+            recv_data = self._sock.recv(max(size, read_size))
             if not recv_data:
                 raise OperationalError(2013, "Lost connection to MySQL server during query")
-            chunks.append(recv_data)
-            size -= len(recv_data)
+            chunk_len = len(recv_data)
+            if chunk_len <= size:
+                chunks.append(recv_data)
+                size -= chunk_len
+            else:
+                chunks.append(recv_data[:size])
+                self._buf = bytearray(recv_data[size:])
+                self._buf_pos = 0
+                size = 0
+
         return b''.join(chunks)
 
     def recv_uncompress_packet(self):
