@@ -24,14 +24,20 @@ class SocketWrapper():
         self._decompressed = b''
 
     def recv(self, size):
-        r = b''
+        recv_data = self._sock.recv(size)
+        if not recv_data:
+            raise OperationalError(2013, "Lost connection to MySQL server during query")
+        if len(recv_data) == size:
+            return recv_data
+        chunks = [recv_data]
+        size -= len(recv_data)
         while size:
             recv_data = self._sock.recv(size)
             if not recv_data:
                 raise OperationalError(2013, "Lost connection to MySQL server during query")
+            chunks.append(recv_data)
             size -= len(recv_data)
-            r += recv_data
-        return r
+        return b''.join(chunks)
 
     def recv_uncompress_packet(self):
         return self.recv(unpack_uint24(self.recv(4)))

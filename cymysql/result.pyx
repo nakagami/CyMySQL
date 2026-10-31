@@ -1,5 +1,5 @@
 from cymysql.packet import MysqlPacket, FieldDescriptorPacket
-
+from cymysql.converters import convert_characters, convert_json, convert_set
 from cymysql.constants import SERVER_STATUS, FLAG
 
 
@@ -11,8 +11,8 @@ cdef class MySQLResult(object):
     cdef public object message, description
     cdef public object connection
     cdef public int has_next
-    cdef object first_packet, fields
-    cdef int rest_row_index, server_status, warning_count, field_count
+    cdef public object first_packet, fields, _decoders
+    cdef public int rest_row_index, server_status, warning_count, field_count
 
     def __init__(self, connection):
         from weakref import proxy
@@ -28,6 +28,30 @@ cdef class MySQLResult(object):
         self.has_result = False
         self.rest_rows = None
         self.rest_row_index = 0
+        self._decoders = None
+
+    def _build_decoders(self):
+        conv = self.connection.conv
+        encoding = self.connection.encoding
+        prepared = []
+        for f in self.fields:
+            d = conv.get(f.type_code)
+            if d is None:
+                prepared.append(None)
+            elif d is convert_characters:
+                if f.is_set:
+                    f_enc = f.encoding
+                    prepared.append(lambda v, enc=f_enc: convert_set(v.decode(enc)))
+                elif f.is_binary and f.charset == 'binary':
+                    prepared.append(lambda v: v)
+                else:
+                    f_enc = f.encoding
+                    prepared.append(lambda v, enc=f_enc: v.decode(enc))
+            elif d is convert_json:
+                prepared.append(lambda v, enc=encoding: v.decode(enc))
+            else:
+                prepared.append(d)
+        return tuple(prepared)
 
     def read_result(self):
         self.first_packet = MysqlPacket(
@@ -53,7 +77,7 @@ cdef class MySQLResult(object):
         if (not self.has_result) or (self.rest_rows is not None):
             return
         rest_rows = []
-        decoder = self.connection.conv
+        decoder = self._decoders if self._decoders is not None else self.connection.conv
         while True:
             packet = MysqlPacket(
                 self.connection.socket.recv_packet(),
@@ -92,11 +116,13 @@ cdef class MySQLResult(object):
         )
         assert eof_packet.is_eof_packet(), 'Protocol error, expecting EOF'
         self.description = tuple(description)
+        self._decoders = self._build_decoders()
 
     def fetchone(self):
         cdef int is_eof, warning_count, server_status
         if not self.has_result:
             return None
+        decoder = self._decoders if self._decoders is not None else self.connection.conv
         if self.rest_rows is None:
             packet = MysqlPacket(
                 self.connection.socket.recv_packet(),
@@ -110,7 +136,7 @@ cdef class MySQLResult(object):
                 self.has_next = (server_status & SERVER_MORE_RESULTS_EXISTS)
                 self.rest_rows = []
                 return None
-            return packet.read_decode_data(self.fields, self.connection.conv)
+            return packet.read_decode_data(self.fields, decoder)
         elif len(self.rest_rows) != self.rest_row_index:
             self.rest_row_index += 1
             return self.rest_rows[self.rest_row_index - 1]

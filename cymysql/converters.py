@@ -47,7 +47,7 @@ def escape_string(value: str) -> str:
 def escape_bytes(value: bytes) -> str:
     if len(value) == 0:
         return "''"
-    return '0x' + ''.join([('0'+hex(c)[2:])[-2:] for c in value])
+    return '0x' + value.hex()
 
 
 def escape_None(value: Any) -> str:

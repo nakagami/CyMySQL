@@ -7,7 +7,7 @@ from cymysql.err import raise_mysql_exception, OperationalError
 from cymysql.constants import SERVER_STATUS, FLAG
 from cymysql.converters import convert_characters, convert_json
 from cymysql.charset import charset_by_id, encoding_by_charset
-from libc.stdint cimport uint16_t, uint32_t
+from libc.stdint cimport uint16_t, uint32_t, uint64_t
 
 
 cdef int FIELD_TYPE_VAR_STRING = 253
@@ -21,18 +21,18 @@ cdef int SERVER_MORE_RESULTS_EXISTS = SERVER_STATUS.SERVER_MORE_RESULTS_EXISTS
 
 
 cdef uint16_t unpack_uint16(bytes s):
-    cdef unsigned char* n = s
-    return n[0] + (n[1] << 8)
+    cdef const unsigned char* n = <const unsigned char*>s
+    return n[0] | (n[1] << 8)
 
 
-cdef  uint32_t unpack_uint24(bytes s):
-    cdef unsigned char* n = s
-    return n[0] + (n[1] << 8) + (n[2] << 16)
+cdef uint32_t unpack_uint24(bytes s):
+    cdef const unsigned char* n = <const unsigned char*>s
+    return n[0] | (n[1] << 8) | (n[2] << 16)
 
 
 cdef uint32_t unpack_uint32(bytes s):
-    cdef unsigned char* n = s
-    return n[0] + (n[1] << 8) + (n[2] << 16) + (n[3] << 24)
+    cdef const unsigned char* n = <const unsigned char*>s
+    return n[0] | (n[1] << 8) | (n[2] << 16) | (n[3] << 24)
 
 
 cdef long long unpack_uint64(bytes n):
@@ -45,18 +45,18 @@ cdef class MysqlPacket(object):
     for reading/parsing the packet results."""
     cdef object connection, _socket, _charset, _encoding
     cdef bytes __data
+    cdef const unsigned char* __buf
     cdef int __position
 
     def __init__(self, data, charset, encoding):
-        cdef int is_error
         self._charset = charset
         self._encoding = encoding
         self.__position = 0
         self.__data = data
-        is_error = (<unsigned char>(self.__data[0])) == 0xff
-        if is_error:
+        self.__buf = <const unsigned char*>self.__data
+        if self.__buf[0] == 0xff:
             self.__position += 1  # field_count == error (we already know that)
-            unpack_uint16(self._read(2))    # errno
+            self._read_uint16()   # errno
             raise_mysql_exception(self.__data)
 
     def get_all_data(self):
@@ -67,8 +67,44 @@ cdef class MysqlPacket(object):
 
     cdef bytes _read(self, int size):
         """Read the first 'size' bytes in packet and advance cursor past them."""
-        self.__position += size
-        return self.__data[self.__position - size:self.__position]
+        cdef int pos = self.__position
+        self.__position = pos + size
+        return self.__data[pos:self.__position]
+
+    cdef inline unsigned char _read_uint8(self):
+        cdef int pos = self.__position
+        self.__position = pos + 1
+        return self.__buf[pos]
+
+    cdef inline uint16_t _read_uint16(self):
+        cdef int pos = self.__position
+        self.__position = pos + 2
+        return self.__buf[pos] | (self.__buf[pos + 1] << 8)
+
+    cdef inline uint32_t _read_uint24(self):
+        cdef int pos = self.__position
+        self.__position = pos + 3
+        return self.__buf[pos] | (self.__buf[pos + 1] << 8) | (self.__buf[pos + 2] << 16)
+
+    cdef inline uint32_t _read_uint32(self):
+        cdef int pos = self.__position
+        self.__position = pos + 4
+        return (self.__buf[pos] |
+                (self.__buf[pos + 1] << 8) |
+                (self.__buf[pos + 2] << 16) |
+                (self.__buf[pos + 3] << 24))
+
+    cdef inline uint64_t _read_uint64(self):
+        cdef int pos = self.__position
+        self.__position = pos + 8
+        return ((<uint64_t>(self.__buf[pos])) |
+                ((<uint64_t>(self.__buf[pos + 1])) << 8) |
+                ((<uint64_t>(self.__buf[pos + 2])) << 16) |
+                ((<uint64_t>(self.__buf[pos + 3])) << 24) |
+                ((<uint64_t>(self.__buf[pos + 4])) << 32) |
+                ((<uint64_t>(self.__buf[pos + 5])) << 40) |
+                ((<uint64_t>(self.__buf[pos + 6])) << 48) |
+                ((<uint64_t>(self.__buf[pos + 7])) << 56))
 
     cdef void _skip(self, int size):
         """Read the first 'size' bytes in packet and advance cursor past them."""
@@ -82,21 +118,25 @@ cdef class MysqlPacket(object):
         self.__position = -1  # ensure no subsequent read() or peek()
         return self.__data[self.__position:]
 
-    cdef int read_length_coded_binary(self):
+    cdef object read_length_coded_binary(self):
         """Read a 'Length Coded Binary' number from the data buffer.
 
         Length coded numbers can be anywhere from 1 to 9 bytes depending
         on the value of the first byte.
         """
-        cdef unsigned char c = self._read(1)[0]
-        if c == UNSIGNED_CHAR_COLUMN:
-            return -1
+        cdef int pos = self.__position
+        cdef unsigned char c = self.__buf[pos]
+        self.__position = pos + 1
+        if c < UNSIGNED_CHAR_COLUMN:
+            return c
+        elif c == UNSIGNED_CHAR_COLUMN:
+            return None
         elif c == UNSIGNED_SHORT_COLUMN:
-            return unpack_uint16(self._read(2))
+            return self._read_uint16()
         elif c == UNSIGNED_INT24_COLUMN:
-            return unpack_uint24(self._read(3))
+            return self._read_uint24()
         elif c == UNSIGNED_INT64_COLUMN:
-            return unpack_uint64(self._read(8))
+            return self._read_uint64()
         else:
             return c
 
@@ -107,47 +147,65 @@ cdef class MysqlPacket(object):
         (unsigned, positive) integer represented in 1-9 bytes followed by
         that many bytes of binary data.  (For example "cat" would be "3cat".)
         """
-        cdef int length 
-        length = self.read_length_coded_binary()
-        if length < 0:
+        cdef object length = self.read_length_coded_binary()
+        if length is None:
             return None
-        return self._read(length)
+        cdef int pos = self.__position
+        self.__position = pos + <int>length
+        return self.__data[pos:self.__position]
 
     cpdef read_decode_data(self, fields, decoders):
-        return tuple([
-            None if value is None
-            else decoder(value, self._encoding, field)
-            if decoder in (convert_characters, convert_json)
-            else decoder(value)
-            for value, field, decoder in [
-                (self._read_length_coded_string(), f, decoders.get(f.type_code))
-                for f in fields
-            ]
-        ])
+        cdef list row = []
+        cdef object val, d, f
+        cdef int i, n
+        if isinstance(decoders, dict):
+            n = len(fields)
+            for i in range(n):
+                val = self._read_length_coded_string()
+                if val is None:
+                    row.append(None)
+                else:
+                    f = fields[i]
+                    d = decoders.get(f.type_code)
+                    if d in (convert_characters, convert_json):
+                        row.append(d(val, self._encoding, f))
+                    elif d is not None:
+                        row.append(d(val))
+                    else:
+                        row.append(val)
+        else:
+            n = len(decoders)
+            for i in range(n):
+                val = self._read_length_coded_string()
+                if val is None:
+                    row.append(None)
+                else:
+                    d = decoders[i]
+                    row.append(d(val) if d is not None else val)
+        return tuple(row)
 
     cpdef is_ok_packet(self):
-        return (<unsigned char>(self.__data[0])) == 0
+        return (<unsigned char>(self.__buf[0])) == 0
 
     cpdef is_eof_packet(self):
-        return (<unsigned char>(self.__data[0])) == 0xfe
+        return (<unsigned char>(self.__buf[0])) == 0xfe
 
     cpdef is_eof_and_status(self):
-        if (<unsigned char>(self.__data[0])) != 0xfe:
-           return False, 0, 0
-        return True, unpack_uint16(self._read(2)), unpack_uint16(self._read(2))
+        if (<unsigned char>(self.__buf[0])) != 0xfe:
+            return False, 0, 0
+        return True, self._read_uint16(), self._read_uint16()
 
     cpdef read_ok_packet(self):
-        cdef int affected_rows, insert_id, server_status, warning_count
+        cdef object affected_rows, insert_id
+        cdef int server_status, warning_count
         cdef message
         self._skip(1)  # field_count (always '0')
         affected_rows = self.read_length_coded_binary()
         insert_id = self.read_length_coded_binary()
-        server_status = unpack_uint16(self._read(2))
-        warning_count = unpack_uint16(self._read(2))
+        server_status = self._read_uint16()
+        warning_count = self._read_uint16()
         message = self._read_all()
-        return (None if affected_rows < 0 else affected_rows,
-                None if insert_id < 0 else insert_id,
-                server_status, warning_count, message)
+        return (affected_rows, insert_id, server_status, warning_count, message)
 
     cpdef read_auth_switch_request(self):
         cdef int i, j
@@ -185,19 +243,16 @@ cdef class FieldDescriptorPacket(MysqlPacket):
         self.name = self._read_length_coded_string().decode(self._encoding)
         self.org_name = self._read_length_coded_string()
         self._skip(1)  # non-null filler
-        self.charsetnr = unpack_uint16(self._read(2))
+        self.charsetnr = self._read_uint16()
         self.charset = charset_by_id(self.charsetnr).name
         self.encoding = encoding_by_charset(self.charset)
-        self.length = unpack_uint32(self._read(4))
-        self.type_code = ord(self._read(1))
-        self.flags = unpack_uint16(self._read(2))
+        self.length = self._read_uint32()
+        self.type_code = self._read_uint8()
+        self.flags = self._read_uint16()
         self.is_set = self.flags & FLAG.SET
         self.is_binary = self.flags & FLAG.BINARY
-        self.scale = ord(self._read(1))  # "decimals"
+        self.scale = self._read_uint8()  # "decimals"
         self._skip(2)  # filler (always 0x00)
-
-        # 'default' is a length coded binary and is still in the buffer?
-        # not used for normal result sets...
 
     def description(self):
         """Provides a 7-item tuple compatible with the Python PEP249 DB Spec."""
@@ -208,7 +263,7 @@ cdef class FieldDescriptorPacket(MysqlPacket):
             self.get_column_length(),
             self.get_column_length(),
             self.scale,
-            <int>(self.flags % 2 == 0),
+            1 if self.flags % 2 == 0 else 0,
         )
 
     def get_column_length(self):

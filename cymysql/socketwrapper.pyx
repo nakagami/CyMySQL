@@ -16,8 +16,8 @@ cdef bytes pack_int24(int n):
 
 
 cdef uint32_t unpack_uint24(bytes s):
-    cdef unsigned char* n = s
-    return n[0] + (n[1] << 8) + (n[2] << 16)
+    cdef const unsigned char* n = <const unsigned char*>s
+    return n[0] | (n[1] << 8) | (n[2] << 16)
 
 
 cdef class SocketWrapper():
@@ -30,20 +30,28 @@ cdef class SocketWrapper():
         self._compress = compress
         self._decompressed = b''
 
-    cdef recv(self, size):
-        r = b''
+    cpdef recv(self, int size):
+        cdef bytes recv_data = self._sock.recv(size)
+        if not recv_data:
+            raise OperationalError(2013, "Lost connection to MySQL server during query")
+        if len(recv_data) == size:
+            return recv_data
+        cdef list chunks = [recv_data]
+        size -= len(recv_data)
         while size:
             recv_data = self._sock.recv(size)
             if not recv_data:
                 raise OperationalError(2013, "Lost connection to MySQL server during query")
+            chunks.append(recv_data)
             size -= len(recv_data)
-            r += recv_data
-        return r
+        return b''.join(chunks)
 
     def recv_uncompress_packet(self):
         return self.recv(unpack_uint24(self.recv(4)))
 
-    cdef bytes _recv_from_decompressed(self, size):
+    cdef bytes _recv_from_decompressed(self, int size):
+        cdef int compressed_length, uncompressed_length
+        cdef bytes data, recv_data
         if len(self._decompressed) < size:
             compressed_length = unpack_uint24(self.recv(3))
             self.recv(1)  # compressed sequence
@@ -63,7 +71,8 @@ cdef class SocketWrapper():
 
     def recv_packet(self):
         """Read entire mysql packet."""
-        recv_data = b''
+        cdef bytes recv_data = b''
+        cdef int ln
         if self._compress:
             ln = unpack_uint24(self._recv_from_decompressed(4))
             recv_data = self._recv_from_decompressed(ln)

@@ -34,7 +34,7 @@ class AsyncMySQLResult(MySQLResult):
         if (not self.has_result) or (self.rest_rows is not None):
             return
         rest_rows = []
-        decoder = self.connection.conv
+        decoder = self._decoders if self._decoders is not None else self.connection.conv
         while True:
             packet = MysqlPacket(
                 await self.connection.socket.recv_packet(self.connection.loop),
@@ -71,10 +71,12 @@ class AsyncMySQLResult(MySQLResult):
         )
         assert eof_packet.is_eof_packet(), 'Protocol error, expecting EOF'
         self.description = tuple(description)
+        self._decoders = self._build_decoders()
 
     async def fetchone(self):
         if not self.has_result:
             return None
+        decoder = self._decoders if self._decoders is not None else self.connection.conv
         if self.rest_rows is None:
             packet = MysqlPacket(
                 await self.connection.socket.recv_packet(self.connection.loop),
@@ -88,7 +90,7 @@ class AsyncMySQLResult(MySQLResult):
                 self.has_next = (server_status & SERVER_MORE_RESULTS_EXISTS)
                 self.rest_rows = []
                 return None
-            return packet.read_decode_data(self.fields, self.connection.conv)
+            return packet.read_decode_data(self.fields, decoder)
         elif len(self.rest_rows) != self.rest_row_index:
             self.rest_row_index += 1
             return self.rest_rows[self.rest_row_index - 1]

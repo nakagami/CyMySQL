@@ -43,10 +43,9 @@ class MysqlPacket(object):
         self._encoding = encoding
         self.__position = 0
         self.__data = data
-        is_error = self.__data[0] == 0xff
-        if is_error:
+        if self.__data[0] == 0xff:
             self.__position += 1  # field_count == error (we already know that)
-            unpack_uint16(self._read(2))    # errno
+            self._read_uint16()   # errno
             raise_mysql_exception(self.__data)
 
     def get_all_data(self):
@@ -57,8 +56,39 @@ class MysqlPacket(object):
 
     def _read(self, size):
         """Read the first 'size' bytes in packet and advance cursor past them."""
-        self.__position += size
-        return self.__data[self.__position - size:self.__position]
+        pos = self.__position
+        self.__position = pos + size
+        return self.__data[pos:self.__position]
+
+    def _read_uint8(self):
+        pos = self.__position
+        self.__position = pos + 1
+        return self.__data[pos]
+
+    def _read_uint16(self):
+        pos = self.__position
+        self.__position = pos + 2
+        d = self.__data
+        return d[pos] | (d[pos + 1] << 8)
+
+    def _read_uint24(self):
+        pos = self.__position
+        self.__position = pos + 3
+        d = self.__data
+        return d[pos] | (d[pos + 1] << 8) | (d[pos + 2] << 16)
+
+    def _read_uint32(self):
+        pos = self.__position
+        self.__position = pos + 4
+        d = self.__data
+        return d[pos] | (d[pos + 1] << 8) | (d[pos + 2] << 16) | (d[pos + 3] << 24)
+
+    def _read_uint64(self):
+        pos = self.__position
+        self.__position = pos + 8
+        d = self.__data
+        return (d[pos] | (d[pos + 1] << 8) | (d[pos + 2] << 16) | (d[pos + 3] << 24) |
+                (d[pos + 4] << 32) | (d[pos + 5] << 40) | (d[pos + 6] << 48) | (d[pos + 7] << 56))
 
     def _skip(self, size):
         """Read the first 'size' bytes in packet and advance cursor past them."""
@@ -78,15 +108,19 @@ class MysqlPacket(object):
         Length coded numbers can be anywhere from 1 to 9 bytes depending
         on the value of the first byte.
         """
-        c = ord(self._read(1))
-        if c == UNSIGNED_CHAR_COLUMN:
+        pos = self.__position
+        c = self.__data[pos]
+        self.__position = pos + 1
+        if c < UNSIGNED_CHAR_COLUMN:
+            return c
+        elif c == UNSIGNED_CHAR_COLUMN:
             return None
         elif c == UNSIGNED_SHORT_COLUMN:
-            return unpack_uint16(self._read(2))
+            return self._read_uint16()
         elif c == UNSIGNED_INT24_COLUMN:
-            return unpack_uint24(self._read(3))
+            return self._read_uint24()
         elif c == UNSIGNED_INT64_COLUMN:
-            return unpack_uint64(self._read(8))
+            return self._read_uint64()
         else:
             return c
 
@@ -100,19 +134,34 @@ class MysqlPacket(object):
         length = self.read_length_coded_binary()
         if length is None:
             return None
-        return self._read(length)
+        pos = self.__position
+        self.__position = pos + length
+        return self.__data[pos:self.__position]
 
     def read_decode_data(self, fields, decoders):
-        return tuple([
-            None if value is None
-            else decoder(value, self._encoding, field)
-            if decoder in (convert_characters, convert_json)
-            else decoder(value)
-            for value, field, decoder in [
-                (self._read_length_coded_string(), f, decoders.get(f.type_code))
-                for f in fields
-            ]
-        ])
+        row = []
+        if isinstance(decoders, dict):
+            encoding = self._encoding
+            for f in fields:
+                val = self._read_length_coded_string()
+                if val is None:
+                    row.append(None)
+                else:
+                    d = decoders.get(f.type_code)
+                    if d in (convert_characters, convert_json):
+                        row.append(d(val, encoding, f))
+                    elif d is not None:
+                        row.append(d(val))
+                    else:
+                        row.append(val)
+        else:
+            for d in decoders:
+                val = self._read_length_coded_string()
+                if val is None:
+                    row.append(None)
+                else:
+                    row.append(d(val) if d is not None else val)
+        return tuple(row)
 
     def is_ok_packet(self):
         return self.__data[0] == 0
@@ -123,18 +172,24 @@ class MysqlPacket(object):
     def is_eof_and_status(self):
         if self.__data[0] != 0xfe:
             return False, 0, 0
-        return True, unpack_uint16(self._read(2)), unpack_uint16(self._read(2))
+        return True, self._read_uint16(), self._read_uint16()
 
     def read_ok_packet(self):
         self._skip(1)  # field_count (always '0')
         affected_rows = self.read_length_coded_binary()
         insert_id = self.read_length_coded_binary()
-        server_status = unpack_uint16(self._read(2))
-        warning_count = unpack_uint16(self._read(2))
+        server_status = self._read_uint16()
+        warning_count = self._read_uint16()
         message = self._read_all()
-        return (None if affected_rows < 0 else affected_rows,
-                None if insert_id < 0 else insert_id,
-                server_status, warning_count, message)
+        return (affected_rows, insert_id, server_status, warning_count, message)
+
+    def read_auth_switch_request(self):
+        data = self.get_all_data()
+        i = data.find(b'\0', 1)
+        plugin_name = data[1:i].decode('utf-8')
+        j = data.find(b'\0', i + 1)
+        salt = data[i + 1:j]
+        return plugin_name, salt
 
 
 class FieldDescriptorPacket(MysqlPacket):
@@ -159,19 +214,16 @@ class FieldDescriptorPacket(MysqlPacket):
         self.name = self._read_length_coded_string().decode(self._encoding)
         self.org_name = self._read_length_coded_string()
         self._skip(1)  # non-null filler
-        self.charsetnr = unpack_uint16(self._read(2))
+        self.charsetnr = self._read_uint16()
         self.charset = charset_by_id(self.charsetnr).name
         self.encoding = encoding_by_charset(self.charset)
-        self.length = unpack_uint32(self._read(4))
-        self.type_code = ord(self._read(1))
-        self.flags = unpack_uint16(self._read(2))
+        self.length = self._read_uint32()
+        self.type_code = self._read_uint8()
+        self.flags = self._read_uint16()
         self.is_set = self.flags & FLAG.SET
         self.is_binary = self.flags & FLAG.BINARY
-        self.scale = ord(self._read(1))  # "decimals"
+        self.scale = self._read_uint8()  # "decimals"
         self._skip(2)  # filler (always 0x00)
-
-        # 'default' is a length coded binary and is still in the buffer?
-        # not used for normal result sets...
 
     def description(self):
         """Provides a 7-item tuple compatible with the Python PEP249 DB Spec."""

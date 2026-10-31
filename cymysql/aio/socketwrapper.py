@@ -22,29 +22,39 @@ class AsyncSocketWrapper(SocketWrapper):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    async def recv(self, size, loop):
-        r = b''
-        while size:
-            if isinstance(self._sock, ssl.SSLSocket):
-                while True:
+    async def _sock_recv(self, size, loop):
+        if isinstance(self._sock, ssl.SSLSocket):
+            while True:
+                try:
+                    return self._sock.recv(size)
+                except (ssl.SSLWantReadError, BlockingIOError):
+                    future = loop.create_future()
+                    fd = self._sock.fileno()
+                    loop.add_reader(fd, lambda: (loop.remove_reader(fd), not future.done() and future.set_result(None)))
                     try:
-                        recv_data = self._sock.recv(size)
-                        break
-                    except (ssl.SSLWantReadError, BlockingIOError):
-                        future = loop.create_future()
-                        fd = self._sock.fileno()
-                        loop.add_reader(fd, lambda: (loop.remove_reader(fd), not future.done() and future.set_result(None)))
-                        try:
-                            await future
-                        finally:
-                            loop.remove_reader(fd)
-            else:
-                recv_data = await loop.sock_recv(self._sock, size)
-            if not recv_data:
+                        await future
+                    finally:
+                        loop.remove_reader(fd)
+        else:
+            return await loop.sock_recv(self._sock, size)
+
+    async def recv(self, size, loop):
+        chunk = await self._sock_recv(size, loop)
+        if not chunk:
+            raise OperationalError(2013, "Lost connection to MySQL server during query")
+        if len(chunk) == size:
+            return chunk
+
+        chunks = [chunk]
+        size -= len(chunk)
+        while size > 0:
+            chunk = await self._sock_recv(size, loop)
+            if not chunk:
                 raise OperationalError(2013, "Lost connection to MySQL server during query")
-            size -= len(recv_data)
-            r += recv_data
-        return r
+            chunks.append(chunk)
+            size -= len(chunk)
+
+        return b''.join(chunks)
 
     async def recv_uncompress_packet(self, loop):
         return await self.recv(unpack_uint24(await self.recv(4, loop)), loop)
