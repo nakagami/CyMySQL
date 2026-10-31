@@ -9,6 +9,7 @@ from cymysql.converters import convert_characters, convert_json
 from cymysql.charset import charset_by_id, encoding_by_charset
 from libc.stdint cimport uint16_t, uint32_t, uint64_t
 from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
+from cpython.bytes cimport PyBytes_FromStringAndSize
 from cpython.ref cimport Py_INCREF
 
 
@@ -45,10 +46,6 @@ cdef class MysqlPacket(object):
     """Representation of a MySQL response packet.  Reads in the packet
     from the network socket, removes packet header and provides an interface
     for reading/parsing the packet results."""
-    cdef object connection, _socket, _charset, _encoding
-    cdef bytes __data
-    cdef const unsigned char* __buf
-    cdef int __position
 
     def __init__(self, data, charset, encoding):
         self._charset = charset
@@ -201,7 +198,7 @@ cdef class MysqlPacket(object):
             return None
         cdef int pos = self.__position
         self.__position = pos + ln
-        return self.__data[pos:pos+ln]
+        return PyBytes_FromStringAndSize(<const char*>self.__buf + pos, ln)
 
     cpdef read_decode_data(self, fields, decoders):
         cdef list row_l
@@ -283,9 +280,6 @@ cdef class FieldDescriptorPacket(MysqlPacket):
     Parsing is automatically done and the results are exported via public
     attributes on the class such as: db, table_name, name, length, type_code.
     """
-    cdef public object catalog, db, table_name, org_table, name, org_name
-    cdef public int charsetnr, length, type_code, flags, scale, is_set, is_binary
-    cdef public str charset, encoding
 
     def __init__(self, *args):
         MysqlPacket.__init__(self, *args)

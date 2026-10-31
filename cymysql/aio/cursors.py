@@ -3,7 +3,7 @@ import sys
 from typing import Any
 import weakref
 
-from ..cursors import Cursor
+from ..cursors import Cursor, RE_INSERT_VALUES
 
 
 class AsyncCursor(Cursor):
@@ -63,16 +63,7 @@ class AsyncCursor(Cursor):
         del self.messages[:]
 
         if args is not None:
-            if isinstance(args, (tuple, list)):
-                escaped_args = tuple(conn.escape(arg) for arg in args)
-            elif isinstance(args, dict):
-                escaped_args = dict((key, conn.escape(val)) for (key, val) in args.items())
-            else:
-                # If it's not a dictionary let's try escaping it anyways.
-                # Worst case it will throw a Value error
-                escaped_args = conn.escape(args)
-
-            query = query % escaped_args
+            query = query % self._escape_args(args, conn)
 
         try:
             await self._query(query)
@@ -85,9 +76,61 @@ class AsyncCursor(Cursor):
         self._executed = query
         conn._last_execute_cursor = weakref.ref(self)
 
+    async def _do_execute_many(
+        self, prefix: str, values: str, postfix: str, args: Sequence[Any], max_stmt_length: int
+    ) -> int:
+        conn = self._get_db()
+        sql = [prefix]
+        cur_len = len(prefix) + len(postfix)
+        rowcount = 0
+        first = True
+
+        for arg in args:
+            escaped_val = values % self._escape_args(arg, conn)
+            val_len = len(escaped_val) + (0 if first else 1)
+            if not first and cur_len + val_len > max_stmt_length:
+                await self.execute("".join(sql) + postfix)
+                if self.rowcount != -1:
+                    rowcount += self.rowcount
+                sql = [prefix, escaped_val]
+                cur_len = len(prefix) + len(postfix) + len(escaped_val)
+            else:
+                if not first:
+                    sql.append(",")
+                sql.append(escaped_val)
+                cur_len += val_len
+                first = False
+
+        if not first:
+            await self.execute("".join(sql) + postfix)
+            if self.rowcount != -1:
+                rowcount += self.rowcount
+
+        self._result = None
+        self._rowcount = rowcount
+        return rowcount
+
     async def executemany(self, query: str | bytes, args: Sequence[Sequence[Any] | dict[str, Any] | Any]) -> int:
         ''' Run several data against one query '''
         del self.messages[:]
+
+        if not args:
+            self._rowcount = 0
+            return 0
+
+        conn = self._get_db()
+        q_str = query if isinstance(query, str) else query.decode(conn.encoding)
+        m = RE_INSERT_VALUES.match(q_str)
+        if m:
+            try:
+                q_prefix = m.group(1) % ()
+            except (TypeError, ValueError):
+                q_prefix = m.group(1)
+            q_values = m.group(2).rstrip()
+            q_postfix = m.group(3) or ""
+            return await self._do_execute_many(
+                q_prefix, q_values, q_postfix, args, self.max_stmt_length
+            )
 
         rowcount = 0
         for params in args:
@@ -153,27 +196,14 @@ class AsyncCursor(Cursor):
         size = size or self.arraysize
         if self._result is None:
             return None
-        result = []
-        for i in range(size):
-            r = await self._result.fetchone()
-            if not r:
-                break
-            result.append(r)
-        return result
+        return await self._result.fetchmany(size)
 
     async def fetchall(self) -> list[tuple[Any, ...]] | None:
         ''' Fetch all the rows '''
         self._check_executed()
         if self._result is None:
             return None
-        result = []
-
-        r = await self._result.fetchone()
-        while r:
-            result.append(r)
-            r = await self._result.fetchone()
-
-        return result
+        return await self._result.fetchall()
 
     async def _query(self, q: str) -> None:
         conn = self._get_db()

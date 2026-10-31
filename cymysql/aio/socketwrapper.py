@@ -42,7 +42,7 @@ class AsyncSocketWrapper(SocketWrapper):
     async def recv(self, size, loop):
         buf_len = len(self._buf) - self._buf_pos
         if buf_len >= size:
-            res = bytes(self._buf[self._buf_pos:self._buf_pos + size])
+            res = bytes(memoryview(self._buf)[self._buf_pos:self._buf_pos + size])
             self._buf_pos += size
             if self._buf_pos == len(self._buf):
                 self._buf.clear()
@@ -51,7 +51,7 @@ class AsyncSocketWrapper(SocketWrapper):
 
         chunks = []
         if buf_len > 0:
-            chunks.append(bytes(self._buf[self._buf_pos:]))
+            chunks.append(bytes(memoryview(self._buf)[self._buf_pos:]))
             self._buf.clear()
             self._buf_pos = 0
             size -= buf_len
@@ -101,22 +101,44 @@ class AsyncSocketWrapper(SocketWrapper):
             ln = unpack_uint24(await self._recv_from_decompressed(4, loop))
             recv_data = await self._recv_from_decompressed(ln, loop)
         else:
-            buf_len = len(self._buf) - self._buf_pos
-            if buf_len >= 4:
+            read_size = 65536 if isinstance(self._sock, (socket.socket, ssl.SSLSocket)) else 4
+            while True:
+                while (len(self._buf) - self._buf_pos) < 4:
+                    needed = 4 - (len(self._buf) - self._buf_pos)
+                    chunk = await self._sock_recv(max(needed, read_size), loop)
+                    if not chunk:
+                        raise OperationalError(2013, "Lost connection to MySQL server during query")
+                    if self._buf_pos > 0:
+                        del self._buf[:self._buf_pos]
+                        self._buf_pos = 0
+                    self._buf.extend(chunk)
+
                 pos = self._buf_pos
                 ln = self._buf[pos] | (self._buf[pos+1] << 8) | (self._buf[pos+2] << 16)
-                if buf_len >= 4 + ln and ln < 0xffffff:
-                    recv_data = bytes(memoryview(self._buf)[pos+4:pos+4+ln])
-                    self._buf_pos = pos + 4 + ln
-                    if self._buf_pos == len(self._buf):
-                        self._buf.clear()
-                        self._buf_pos = 0
-                    return recv_data
 
-            while True:
-                ln = int.from_bytes((await self.recv(4, loop))[:3], "little")
-                recv_data += await self.recv(ln, loop)
-                if recv_data[:3] != b'\xff\xff\xff':
+                while (len(self._buf) - self._buf_pos) < 4 + ln:
+                    needed = 4 + ln - (len(self._buf) - self._buf_pos)
+                    chunk = await self._sock_recv(max(needed, read_size), loop)
+                    if not chunk:
+                        raise OperationalError(2013, "Lost connection to MySQL server during query")
+                    if self._buf_pos > 0:
+                        del self._buf[:self._buf_pos]
+                        self._buf_pos = 0
+                        pos = 0
+                    self._buf.extend(chunk)
+
+                packet_chunk = bytes(memoryview(self._buf)[pos+4:pos+4+ln])
+                self._buf_pos = pos + 4 + ln
+                if self._buf_pos == len(self._buf):
+                    self._buf.clear()
+                    self._buf_pos = 0
+
+                if recv_data:
+                    recv_data += packet_chunk
+                else:
+                    recv_data = packet_chunk
+
+                if ln < 0xffffff:
                     break
 
         return recv_data

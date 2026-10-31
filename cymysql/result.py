@@ -38,11 +38,16 @@ class MySQLResult(object):
                     prepared.append(lambda v, enc=f_enc: convert_set(v.decode(enc)))
                 elif f.is_binary and f.charset == 'binary':
                     prepared.append(lambda v: v)
+                elif f.encoding in ('utf-8', 'utf8'):
+                    prepared.append(bytes.decode)
                 else:
                     f_enc = f.encoding
                     prepared.append(lambda v, enc=f_enc: v.decode(enc))
             elif d is convert_json:
-                prepared.append(lambda v, enc=encoding: v.decode(enc))
+                if encoding in ('utf-8', 'utf8'):
+                    prepared.append(bytes.decode)
+                else:
+                    prepared.append(lambda v, enc=encoding: v.decode(enc))
             else:
                 prepared.append(d)
         return tuple(prepared)
@@ -116,22 +121,47 @@ class MySQLResult(object):
     def fetchone(self):
         if not self.has_result:
             return None
+        if self.rest_rows is not None:
+            if self.rest_row_index < len(self.rest_rows):
+                row = self.rest_rows[self.rest_row_index]
+                self.rest_row_index += 1
+                return row
+            return None
         decoder = self._decoders if self._decoders is not None else self.connection.conv
+        packet = MysqlPacket(
+            self.connection.socket.recv_packet(),
+            self.connection.charset,
+            self.connection.encoding,
+        )
+        is_eof, warning_count, server_status = packet.is_eof_and_status()
+        if is_eof:
+            self.warning_count = warning_count
+            self.server_status = server_status
+            self.has_next = (server_status & SERVER_MORE_RESULTS_EXISTS)
+            self.rest_rows = []
+            return None
+        return packet.read_decode_data(self.fields, decoder)
+
+    def fetchmany(self, size=None):
+        if not self.has_result:
+            return []
         if self.rest_rows is None:
-            packet = MysqlPacket(
-                self.connection.socket.recv_packet(),
-                self.connection.charset,
-                self.connection.encoding,
-            )
-            is_eof, warning_count, server_status = packet.is_eof_and_status()
-            if is_eof:
-                self.warning_count = warning_count
-                self.server_status = server_status
-                self.has_next = (server_status & SERVER_MORE_RESULTS_EXISTS)
-                self.rest_rows = []
-                return None
-            return packet.read_decode_data(self.fields, decoder)
-        elif len(self.rest_rows) != self.rest_row_index:
-            self.rest_row_index += 1
-            return self.rest_rows[self.rest_row_index - 1]
-        return None
+            self.read_rest_rowdata_packet()
+        if self.rest_rows is not None:
+            s = 1 if size is None else size
+            start = self.rest_row_index
+            end = min(start + s, len(self.rest_rows))
+            self.rest_row_index = end
+            return self.rest_rows[start:end]
+        return []
+
+    def fetchall(self):
+        if not self.has_result:
+            return []
+        if self.rest_rows is None:
+            self.read_rest_rowdata_packet()
+        if self.rest_rows is not None:
+            start = self.rest_row_index
+            self.rest_row_index = len(self.rest_rows)
+            return self.rest_rows[start:]
+        return []

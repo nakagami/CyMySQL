@@ -261,6 +261,36 @@ class TestCursor(base.PyMySQLTestCase):
         except cymysql.ProgrammingError:
             pass
 
+    def test_executemany(self):
+        conn = self.connections[0]
+        c = conn.cursor()
+        c.execute("create table test_executemany (id int, val varchar(20))")
+        try:
+            # empty args
+            cnt = c.executemany("insert into test_executemany values (%s, %s)", [])
+            self.assertEqual(cnt, 0)
+
+            # bulk insert
+            data = [(1, "a"), (2, "b"), (3, "c")]
+            cnt = c.executemany("insert into test_executemany values (%s, %s)", data)
+            self.assertEqual(cnt, 3)
+            self.assertEqual(c.rowcount, 3)
+
+            # batching with small max_stmt_length
+            c.max_stmt_length = 50
+            data2 = [(i, f"v_{i}") for i in range(4, 14)]
+            cnt2 = c.executemany("insert into test_executemany (id, val) values (%s, %s)", data2)
+            self.assertEqual(cnt2, 10)
+
+            c.execute("select count(*) from test_executemany")
+            self.assertEqual(c.fetchone()[0], 13)
+
+            # non-insert fallback
+            cnt_up = c.executemany("update test_executemany set val='updated' where id = %s", [(1,), (2,)])
+            self.assertEqual(cnt_up, 2)
+        finally:
+            c.execute("drop table test_executemany")
+
 
 class TestConnection(base.PyMySQLTestCase):
     def test_autocommit(self):

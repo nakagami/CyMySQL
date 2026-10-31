@@ -81,22 +81,47 @@ class AsyncMySQLResult(MySQLResult):
     async def fetchone(self):
         if not self.has_result:
             return None
+        if self.rest_rows is not None:
+            if self.rest_row_index < len(self.rest_rows):
+                row = self.rest_rows[self.rest_row_index]
+                self.rest_row_index += 1
+                return row
+            return None
         decoder = self._decoders if self._decoders is not None else self.connection.conv
+        packet = MysqlPacket(
+            await self.connection.socket.recv_packet(self.connection.loop),
+            self.connection.charset,
+            self.connection.encoding,
+        )
+        is_eof, warning_count, server_status = packet.is_eof_and_status()
+        if is_eof:
+            self.warning_count = warning_count
+            self.server_status = server_status
+            self.has_next = (server_status & SERVER_MORE_RESULTS_EXISTS)
+            self.rest_rows = []
+            return None
+        return packet.read_decode_data(self.fields, decoder)
+
+    async def fetchmany(self, size=None):
+        if not self.has_result:
+            return []
         if self.rest_rows is None:
-            packet = MysqlPacket(
-                await self.connection.socket.recv_packet(self.connection.loop),
-                self.connection.charset,
-                self.connection.encoding,
-            )
-            is_eof, warning_count, server_status = packet.is_eof_and_status()
-            if is_eof:
-                self.warning_count = warning_count
-                self.server_status = server_status
-                self.has_next = (server_status & SERVER_MORE_RESULTS_EXISTS)
-                self.rest_rows = []
-                return None
-            return packet.read_decode_data(self.fields, decoder)
-        elif len(self.rest_rows) != self.rest_row_index:
-            self.rest_row_index += 1
-            return self.rest_rows[self.rest_row_index - 1]
-        return None
+            await self.read_rest_rowdata_packet()
+        if self.rest_rows is not None:
+            s = 1 if size is None else size
+            start = self.rest_row_index
+            end = min(start + s, len(self.rest_rows))
+            self.rest_row_index = end
+            return self.rest_rows[start:end]
+        return []
+
+    async def fetchall(self):
+        if not self.has_result:
+            return []
+        if self.rest_rows is None:
+            await self.read_rest_rowdata_packet()
+        if self.rest_rows is not None:
+            start = self.rest_row_index
+            self.rest_row_index = len(self.rest_rows)
+            return self.rest_rows[start:]
+        return []

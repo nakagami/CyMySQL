@@ -23,11 +23,6 @@ cdef uint32_t unpack_uint24(bytes s):
 
 
 cdef class SocketWrapper():
-    cdef public object _sock
-    cdef public object _compress
-    cdef public object _decompressed
-    cdef public bytearray _buf
-    cdef public int _buf_pos
 
     def __init__(self, sock, compress):
         self._sock = sock
@@ -43,7 +38,7 @@ cdef class SocketWrapper():
         cdef int chunk_len, read_size
 
         if buf_len >= size:
-            res = bytes(self._buf[self._buf_pos:self._buf_pos + size])
+            res = PyBytes_FromStringAndSize(<const char*>self._buf + self._buf_pos, size)
             self._buf_pos += size
             if self._buf_pos == len(self._buf):
                 self._buf.clear()
@@ -52,7 +47,7 @@ cdef class SocketWrapper():
 
         chunks = []
         if buf_len > 0:
-            chunks.append(bytes(self._buf[self._buf_pos:]))
+            chunks.append(PyBytes_FromStringAndSize(<const char*>self._buf + self._buf_pos, buf_len))
             self._buf.clear()
             self._buf_pos = 0
             size -= buf_len
@@ -100,28 +95,53 @@ cdef class SocketWrapper():
     cpdef recv_packet(self):
         """Read entire mysql packet."""
         cdef bytes recv_data = b''
-        cdef int ln, pos, buf_len
+        cdef int ln, pos, read_size, needed
         cdef const unsigned char* b
+        cdef bytes chunk, packet_chunk
         if self._compress:
             ln = unpack_uint24(self._recv_from_decompressed(4))
             recv_data = self._recv_from_decompressed(ln)
         else:
-            buf_len = len(self._buf) - self._buf_pos
-            if buf_len >= 4:
+            read_size = 65536 if isinstance(self._sock, socket.socket) else 4
+            while True:
+                while (len(self._buf) - self._buf_pos) < 4:
+                    needed = 4 - (len(self._buf) - self._buf_pos)
+                    chunk = self._sock.recv(max(needed, read_size))
+                    if not chunk:
+                        raise OperationalError(2013, "Lost connection to MySQL server during query")
+                    if self._buf_pos > 0:
+                        del self._buf[:self._buf_pos]
+                        self._buf_pos = 0
+                    self._buf.extend(chunk)
+
                 pos = self._buf_pos
                 b = <const unsigned char*>self._buf
                 ln = b[pos] | (b[pos+1] << 8) | (b[pos+2] << 16)
-                if buf_len >= 4 + ln and ln < 0xffffff:
-                    recv_data = PyBytes_FromStringAndSize(<const char*>b + pos + 4, ln)
-                    self._buf_pos = pos + 4 + ln
-                    if self._buf_pos == len(self._buf):
-                        self._buf.clear()
-                        self._buf_pos = 0
-                    return recv_data
 
-            while True:
-                recv_data += self.recv(unpack_uint24(self.recv(4)))
-                if recv_data[:3] != b'\xff\xff\xff':
+                while (len(self._buf) - self._buf_pos) < 4 + ln:
+                    needed = 4 + ln - (len(self._buf) - self._buf_pos)
+                    chunk = self._sock.recv(max(needed, read_size))
+                    if not chunk:
+                        raise OperationalError(2013, "Lost connection to MySQL server during query")
+                    if self._buf_pos > 0:
+                        del self._buf[:self._buf_pos]
+                        self._buf_pos = 0
+                        pos = 0
+                    self._buf.extend(chunk)
+                    b = <const unsigned char*>self._buf
+
+                packet_chunk = PyBytes_FromStringAndSize(<const char*>b + pos + 4, ln)
+                self._buf_pos = pos + 4 + ln
+                if self._buf_pos == len(self._buf):
+                    self._buf.clear()
+                    self._buf_pos = 0
+
+                if recv_data:
+                    recv_data += packet_chunk
+                else:
+                    recv_data = packet_chunk
+
+                if ln < 0xffffff:
                     break
         return recv_data
 

@@ -5,3 +5,4 @@ dist
 PyMySQL.egg-info
 *.so
 *.c
+build/

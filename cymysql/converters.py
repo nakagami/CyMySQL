@@ -10,6 +10,7 @@ from cymysql.constants import FIELD_TYPE
 ESCAPE_REGEX = re.compile(r"[\0\n\r\032\'\"\\]")
 ESCAPE_MAP = {'\0': '\\0', '\n': '\\n', '\r': '\\r', '\032': '\\Z',
               '\'': '\\\'', '"': '\\"', '\\': '\\\\'}
+ESCAPE_TABLE = str.maketrans(ESCAPE_MAP)
 
 
 def escape_dict(val: dict[Any, Any], charset: str) -> dict[Any, Any]:
@@ -40,8 +41,7 @@ def escape_float(value: float) -> str:
 
 
 def escape_string(value: str) -> str:
-    return ("'%s'" % ESCAPE_REGEX.sub(
-            lambda match: ESCAPE_MAP.get(match.group(0)), value))
+    return f"'{value.translate(ESCAPE_TABLE)}'"
 
 
 def escape_bytes(value: bytes) -> str:
@@ -63,24 +63,15 @@ def escape_timedelta(obj: datetime.timedelta) -> str:
 
 
 def escape_time(obj: datetime.time) -> str:
-    if obj.microsecond:
-        return "'%02d:%02d:%02d.%06d'" % (
-            obj.hour, obj.minute, obj.second, obj.microsecond)
-    else:
-        return "'%02d:%02d:%02d'" % (obj.hour, obj.minute, obj.second)
+    return f"'{obj.isoformat()}'"
 
 
 def escape_datetime(obj: datetime.datetime) -> str:
-    if obj.microsecond:
-        return "'%04d-%02d-%02d %02d:%02d:%02d.%06d'" % (
-            obj.year, obj.month, obj.day, obj.hour, obj.minute, obj.second, obj.microsecond)
-    else:
-        return "'%04d-%02d-%02d %02d:%02d:%02d'" % (
-            obj.year, obj.month, obj.day, obj.hour, obj.minute, obj.second)
+    return f"'{obj.isoformat(sep=' ')}'"
 
 
 def escape_date(obj: datetime.date) -> str:
-    return "'%04d-%02d-%02d'" % (obj.year, obj.month, obj.day)
+    return f"'{obj.isoformat()}'"
 
 
 def escape_struct_time(obj: time.struct_time) -> str:
@@ -343,7 +334,7 @@ except ImportError:
 
 
 def escape_item(val: Any, charset: str, encoders: dict[type, Any] = encoders) -> Any:
-    if type(val) in [tuple, list, set]:
+    if type(val) in (tuple, list, set):
         return escape_sequence(val, charset)
     if type(val) is dict:
         return escape_dict(val, charset)

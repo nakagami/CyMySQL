@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from collections.abc import Sequence
+import re
 import sys
 from typing import TYPE_CHECKING, Any
 import weakref
@@ -12,6 +13,13 @@ from cymysql.err import (
 
 if TYPE_CHECKING:
     from cymysql.connections import Connection
+
+RE_INSERT_VALUES = re.compile(
+    r"\s*((?:INSERT|REPLACE)\b.+\bVALUES?\s*)"
+    r"(\(\s*(?:%s|%\([^)]+\)s)\s*(?:,\s*(?:%s|%\([^)]+\)s)\s*)*\))"
+    r"(\s*(?:AS\s+(?:`[^`]+`|\"[^\"]+\"|[0-9A-Za-z_]+)\s*(?:\(\s*(?:`[^`]+`|\"[^\"]+\"|[0-9A-Za-z_]+)\s*(?:,\s*(?:`[^`]+`|\"[^\"]+\"|[0-9A-Za-z_]+)\s*)*\))?\s*)?(?:ON DUPLICATE.*)?);?\s*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class Cursor(object):
@@ -29,6 +37,7 @@ class Cursor(object):
         self.messages: list[tuple[Any, ...]] = []
         self._result: Any = None
         self._rowcount: int | None = None
+        self.max_stmt_length: int = 1024 * 1024
 
     def __enter__(self) -> 'Cursor':
         return self
@@ -107,6 +116,14 @@ class Cursor(object):
         self._do_get_result()
         return True
 
+    def _escape_args(self, args: Any, conn: Any) -> Any:
+        if isinstance(args, (tuple, list)):
+            return tuple(conn.escape(arg) for arg in args)
+        elif isinstance(args, dict):
+            return dict((key, conn.escape(val)) for (key, val) in args.items())
+        else:
+            return conn.escape(args)
+
     def execute(self, query: str | bytes, args: Sequence[Any] | dict[str, Any] | Any | None = None) -> None:
         ''' Execute a query '''
         self._rowcount = None
@@ -122,16 +139,7 @@ class Cursor(object):
             query = query.decode(encoding)
 
         if args is not None:
-            if isinstance(args, (tuple, list)):
-                escaped_args = tuple(conn.escape(arg) for arg in args)
-            elif isinstance(args, dict):
-                escaped_args = dict((key, conn.escape(val)) for (key, val) in args.items())
-            else:
-                # If it's not a dictionary let's try escaping it anyways.
-                # Worst case it will throw a Value error
-                escaped_args = conn.escape(args)
-
-            query = query % escaped_args
+            query = query % self._escape_args(args, conn)
 
         try:
             self._query(query)
@@ -144,9 +152,61 @@ class Cursor(object):
         self._executed = query
         conn._last_execute_cursor = weakref.ref(self)
 
+    def _do_execute_many(
+        self, prefix: str, values: str, postfix: str, args: Sequence[Any], max_stmt_length: int
+    ) -> int:
+        conn = self._get_db()
+        sql = [prefix]
+        cur_len = len(prefix) + len(postfix)
+        rowcount = 0
+        first = True
+
+        for arg in args:
+            escaped_val = values % self._escape_args(arg, conn)
+            val_len = len(escaped_val) + (0 if first else 1)
+            if not first and cur_len + val_len > max_stmt_length:
+                self.execute("".join(sql) + postfix)
+                if self.rowcount != -1:
+                    rowcount += self.rowcount
+                sql = [prefix, escaped_val]
+                cur_len = len(prefix) + len(postfix) + len(escaped_val)
+            else:
+                if not first:
+                    sql.append(",")
+                sql.append(escaped_val)
+                cur_len += val_len
+                first = False
+
+        if not first:
+            self.execute("".join(sql) + postfix)
+            if self.rowcount != -1:
+                rowcount += self.rowcount
+
+        self._result = None
+        self._rowcount = rowcount
+        return rowcount
+
     def executemany(self, query: str | bytes, args: Sequence[Sequence[Any] | dict[str, Any] | Any]) -> int:
         ''' Run several data against one query '''
         del self.messages[:]
+
+        if not args:
+            self._rowcount = 0
+            return 0
+
+        conn = self._get_db()
+        q_str = query if isinstance(query, str) else query.decode(conn.encoding)
+        m = RE_INSERT_VALUES.match(q_str)
+        if m:
+            try:
+                q_prefix = m.group(1) % ()
+            except (TypeError, ValueError):
+                q_prefix = m.group(1)
+            q_values = m.group(2).rstrip()
+            q_postfix = m.group(3) or ""
+            return self._do_execute_many(
+                q_prefix, q_values, q_postfix, args, self.max_stmt_length
+            )
 
         rowcount = 0
         for params in args:
@@ -216,27 +276,14 @@ class Cursor(object):
         size = size or self.arraysize
         if self._result is None:
             return None
-        result = []
-        for i in range(size):
-            r = self._result.fetchone()
-            if not r:
-                break
-            result.append(r)
-        return result
+        return self._result.fetchmany(size)
 
     def fetchall(self) -> list[tuple[Any, ...]] | None:
         ''' Fetch all the rows '''
         self._check_executed()
         if self._result is None:
             return None
-        result = []
-
-        r = self._result.fetchone()
-        while r:
-            result.append(r)
-            r = self._result.fetchone()
-
-        return result
+        return self._result.fetchall()
 
     def _query(self, q: str) -> None:
         conn = self._get_db()
