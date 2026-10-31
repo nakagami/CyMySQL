@@ -463,7 +463,7 @@ class Connection(object):
 
         if len(sql) + 1 > 0xffffff:
             raise ValueError('Sending query packet is too large')
-        prelude = struct.pack('<i', len(sql)+1) + int2bytes(command)
+        prelude = struct.pack('<IB', len(sql) + 1, command)
         self.socket.send_packet(prelude + sql)
 
     def _scramble(self) -> bytes:
