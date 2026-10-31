@@ -123,8 +123,13 @@ class MySQLResult(object):
         if self.rest_rows is not None:
             if self.rest_row_index < len(self.rest_rows):
                 row = self.rest_rows[self.rest_row_index]
+                self.rest_rows[self.rest_row_index] = None
                 self.rest_row_index += 1
+                if self.rest_row_index >= len(self.rest_rows):
+                    self.rest_rows = []
+                    self.rest_row_index = 0
                 return row
+            self.rest_rows = []
             return None
         decoder = self._decoders if self._decoders is not None else self.connection.conv
         packet = MysqlPacket(
@@ -150,8 +155,14 @@ class MySQLResult(object):
             s = 1 if size is None else size
             start = self.rest_row_index
             end = min(start + s, len(self.rest_rows))
+            rows = self.rest_rows[start:end]
+            for i in range(start, end):
+                self.rest_rows[i] = None
             self.rest_row_index = end
-            return self.rest_rows[start:end]
+            if self.rest_row_index >= len(self.rest_rows):
+                self.rest_rows = []
+                self.rest_row_index = 0
+            return rows
         return []
 
     def fetchall(self):
@@ -161,6 +172,11 @@ class MySQLResult(object):
             self.read_rest_rowdata_packet()
         if self.rest_rows is not None:
             start = self.rest_row_index
-            self.rest_row_index = len(self.rest_rows)
-            return self.rest_rows[start:]
+            if start == 0:
+                rows = self.rest_rows
+            else:
+                rows = [r for r in self.rest_rows[start:] if r is not None]
+            self.rest_rows = []
+            self.rest_row_index = 0
+            return rows
         return []
