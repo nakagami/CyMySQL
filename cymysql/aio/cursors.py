@@ -67,6 +67,8 @@ class AsyncCursor(Cursor):
             self.messages.clear()
 
         if args is not None:
+            if not isinstance(query, str):
+                query = query.decode(conn.encoding)
             query = query % self._escape_args(args, conn)
 
         try:
@@ -85,9 +87,13 @@ class AsyncCursor(Cursor):
     ) -> int:
         conn = self._get_db()
         escape = conn.escape
-        batch_values: list[str] = []
-        cur_len = len(prefix) + len(postfix)
+        encoding = conn.encoding
+        prefix_b = prefix.encode(encoding)
+        postfix_b = postfix.encode(encoding)
+        buf = bytearray(prefix_b)
+        cur_len = len(prefix_b) + len(postfix_b)
         rowcount = 0
+        first = True
 
         for arg in args:
             if type(arg) is tuple:
@@ -99,19 +105,25 @@ class AsyncCursor(Cursor):
             else:
                 escaped_val = values % escape(arg)
 
-            val_len = len(escaped_val) + (1 if batch_values else 0)
-            if batch_values and cur_len + val_len > max_stmt_length:
-                await self.execute(prefix + ",".join(batch_values) + postfix)
+            val_b = escaped_val.encode(encoding)
+            val_len = len(val_b) + (0 if first else 1)
+            if not first and cur_len + val_len > max_stmt_length:
+                await self.execute(bytes(buf) + postfix_b)
                 if self.rowcount != -1:
                     rowcount += self.rowcount
-                batch_values = [escaped_val]
-                cur_len = len(prefix) + len(postfix) + len(escaped_val)
+                buf = bytearray(prefix_b)
+                buf.extend(val_b)
+                cur_len = len(prefix_b) + len(postfix_b) + len(val_b)
             else:
-                batch_values.append(escaped_val)
+                if not first:
+                    buf.extend(b',')
+                else:
+                    first = False
+                buf.extend(val_b)
                 cur_len += val_len
 
-        if batch_values:
-            await self.execute(prefix + ",".join(batch_values) + postfix)
+        if not first:
+            await self.execute(bytes(buf) + postfix_b)
             if self.rowcount != -1:
                 rowcount += self.rowcount
 
@@ -214,9 +226,8 @@ class AsyncCursor(Cursor):
             return None
         return await self._result.fetchall()
 
-    async def _query(self, q: str) -> None:
+    async def _query(self, q: str | bytes) -> None:
         conn = self._get_db()
-        self._last_executed = q
         await conn.query(q)
         self._do_get_result()
 

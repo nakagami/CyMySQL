@@ -12,19 +12,19 @@ class AsyncMySQLResult(MySQLResult):
         super().__init__(*args, **kwargs)
 
     async def read_result(self):
-        self.first_packet = MysqlPacket(
+        first_packet = MysqlPacket(
             await self.connection.socket.recv_packet(self.connection.loop),
             self.connection.charset,
             self.connection.encoding,
         )
 
-        if self.first_packet.is_ok_packet():
+        if first_packet.is_ok_packet():
             (self.affected_rows, self.insert_id,
                 self.server_status, self.warning_count,
-                self.message) = self.first_packet.read_ok_packet()
+                self.message) = first_packet.read_ok_packet()
             self.has_result = False
         else:
-            self.field_count = ord(self.first_packet.read(1))
+            self.field_count = ord(first_packet.read(1))
             await self._get_descriptions()
             self.has_result = True
             await self.read_rest_rowdata_packet()

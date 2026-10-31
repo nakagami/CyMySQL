@@ -1,7 +1,7 @@
 from libc.stdint cimport uint16_t, uint32_t, uint64_t
 
 cdef class MysqlPacket(object):
-    cdef object connection, _socket, _charset, _encoding
+    cdef object _charset, _encoding
     cdef bytes __data
     cdef const unsigned char* __buf
     cdef int __position

@@ -52,19 +52,19 @@ class MySQLResult(object):
         return tuple(prepared)
 
     def read_result(self):
-        self.first_packet = MysqlPacket(
+        first_packet = MysqlPacket(
             self.connection.socket.recv_packet(),
             self.connection.charset,
             self.connection.encoding,
         )
 
-        if self.first_packet.is_ok_packet():
+        if first_packet.is_ok_packet():
             (self.affected_rows, self.insert_id,
                 self.server_status, self.warning_count,
-                self.message) = self.first_packet.read_ok_packet()
+                self.message) = first_packet.read_ok_packet()
             self.has_result = False
         else:
-            self.field_count = ord(self.first_packet.read(1))
+            self.field_count = ord(first_packet.read(1))
             self._get_descriptions()
             self.has_result = True
             self.read_rest_rowdata_packet()
