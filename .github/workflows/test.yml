@@ -23,13 +23,16 @@ jobs:
         options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
     strategy:
       matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14', '3.15']
+        python-version: ['3.11', '3.12', '3.13', '3.14', '3.15']
     steps:
     - uses: actions/checkout@v7
     - name: Set up MySQL
       run: |
         mysql -h 127.0.0.1 -u root -ppassword -e 'CREATE DATABASE IF NOT EXISTS test_cymysql DEFAULT CHARACTER SET utf8mb4;'
         mysql -h 127.0.0.1 -u root -ppassword -e 'CREATE DATABASE IF NOT EXISTS test_cymysql2 DEFAULT CHARACTER SET utf8mb4;'
+        mysql -h 127.0.0.1 -u root -ppassword -e 'CREATE DATABASE IF NOT EXISTS test DEFAULT CHARACTER SET utf8mb4;'
+        mysql -h 127.0.0.1 -u root -ppassword -e 'CREATE DATABASE IF NOT EXISTS test_schema DEFAULT CHARACTER SET utf8mb4;'
+        mysql -h 127.0.0.1 -u root -ppassword -e 'CREATE DATABASE IF NOT EXISTS test_schema_2 DEFAULT CHARACTER SET utf8mb4;'
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v7
       with:
@@ -45,3 +48,7 @@ jobs:
         MYSQL_ROOT_PASSWORD=password pytest
         python -m pip install -e .
         MYSQL_ROOT_PASSWORD=password pytest
+    - name: Test SQLAlchemy
+      run: |
+        python -m pip install . sqlalchemy
+        pytest --dburi="mysql+cymysql://root:password@127.0.0.1:3306/test_cymysql?charset=utf8mb4" test/dialect/mysql/

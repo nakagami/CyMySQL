@@ -17,7 +17,7 @@ http://dev.mysql.com/doc/internals/en/client-server-protocol.html
 Requirements
 -------------
 
-- Python 3.10+
+- Python 3.11+
 - MySQL 5.7 or higher, MariaDB
 
 Installation
