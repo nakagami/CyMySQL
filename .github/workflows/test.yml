@@ -50,5 +50,7 @@ jobs:
         MYSQL_ROOT_PASSWORD=password pytest
     - name: Test SQLAlchemy
       run: |
-        python -m pip install . sqlalchemy
+        python -m pip install sqlalchemy
+        git clone --depth 1 https://github.com/sqlalchemy/sqlalchemy.git
+        cd sqlalchemy
         pytest --dburi="mysql+cymysql://root:password@127.0.0.1:3306/test_cymysql?charset=utf8mb4" test/dialect/mysql/
